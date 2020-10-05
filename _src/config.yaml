@@ -88,3 +88,9 @@ services:
     disableInlineCSS: true
   twitter:
     disableInlineCSS: true
+
+markup:
+  defaultMarkdownHandler: goldmark
+  goldmark:
+    renderer:
+      unsafe: true
