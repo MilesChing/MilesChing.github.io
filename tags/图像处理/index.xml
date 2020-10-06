@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>图像处理 on MilesChing</title>
+    <link>https://MilesChing.github.io/tags/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86/</link>
+    <description>Recent content in 图像处理 on MilesChing</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en</language>
+    <copyright>Copyright © 2020, MilesChing (Zhengrui Qin); all rights reserved.</copyright>
+    <lastBuildDate>Tue, 18 Jun 2019 00:00:00 +0000</lastBuildDate>
+    
+	<atom:link href="https://MilesChing.github.io/tags/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>图像处理学习笔记：像素空间关系</title>
+      <link>https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B002/</link>
+      <pubDate>Tue, 18 Jun 2019 00:00:00 +0000</pubDate>
+      
+      <guid>https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B002/</guid>
+      <description>&lt;p&gt;本节包括像素空间关系及图像运算、图像尺寸更改等话题。&lt;/p&gt;</description>
+    </item>
+    
+    <item>
+      <title>图像处理学习笔记：图像滤波处理</title>
+      <link>https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B003/</link>
+      <pubDate>Tue, 18 Jun 2019 00:00:00 +0000</pubDate>
+      
+      <guid>https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B003/</guid>
+      <description>&lt;p&gt;图像的边缘和其他尖锐跳跃（如噪声）对傅立叶变换的高频分量有很大贡献；滤波处理是通过将图像变换到频域，经过处理后再逆变换回原图像以达到某些特殊效果的方法。本节主要介绍低通滤波器法、高通滤波器法、带通和带阻滤波器法等等。&lt;/p&gt;</description>
+    </item>
+    
+    <item>
+      <title>图像处理学习笔记：数字图像处理基础</title>
+      <link>https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B001/</link>
+      <pubDate>Tue, 18 Jun 2019 00:00:00 +0000</pubDate>
+      
+      <guid>https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B001/</guid>
+      <description>&lt;p&gt;图像处理的方法有模拟式和数字式两种。我们日常生活中见到的图像一般是连续形式的模拟图像，所以&lt;strong&gt;数字图像处理的一个先决条件就是将连续图像离散化，转换为数字图像&lt;/strong&gt;。&lt;/p&gt;</description>
+    </item>
+    
+  </channel>
+</rss>

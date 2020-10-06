@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>公开文档 on MilesChing</title>
+    <link>https://MilesChing.github.io/tags/%E5%85%AC%E5%BC%80%E6%96%87%E6%A1%A3/</link>
+    <description>Recent content in 公开文档 on MilesChing</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en</language>
+    <copyright>Copyright © 2020, MilesChing (Zhengrui Qin); all rights reserved.</copyright>
+    <lastBuildDate>Thu, 25 Jul 2019 00:00:00 +0000</lastBuildDate>
+    
+	<atom:link href="https://MilesChing.github.io/tags/%E5%85%AC%E5%BC%80%E6%96%87%E6%A1%A3/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Guide to Thunder X</title>
+      <link>https://MilesChing.github.io/posts/thunder_x/thunderx_en_us/</link>
+      <pubDate>Thu, 25 Jul 2019 00:00:00 +0000</pubDate>
+      
+      <guid>https://MilesChing.github.io/posts/thunder_x/thunderx_en_us/</guid>
+      <description>&lt;p&gt;Welcome to the guide to Thunder X! Visit &lt;a href=&#34;https://www.microsoft.com/en-us/p/thunder-x/9njqw2wdtd43?activetab=pivot:overviewtab&#34;&gt;Windows store&lt;/a&gt; to download our appication in case you don&amp;rsquo;t know much about Thunder X. For a copy of our source code, view &lt;a href=&#34;https://github.com/MilesChing/ThunderX&#34;&gt;our github page&lt;/a&gt;.&lt;/p&gt;</description>
+    </item>
+    
+    <item>
+      <title>Thunder X 帮助</title>
+      <link>https://MilesChing.github.io/posts/thunder_x/thunderx_zh_cn/</link>
+      <pubDate>Sat, 08 Jun 2019 00:00:00 +0000</pubDate>
+      
+      <guid>https://MilesChing.github.io/posts/thunder_x/thunderx_zh_cn/</guid>
+      <description>&lt;p&gt;欢迎来到Thunder X的帮助文档！如果你还不了解Thunder X是什么，可以点击跳转到&lt;a href=&#34;https://www.microsoft.com/en-us/p/thunder-x/9njqw2wdtd43?activetab=pivot:overviewtab&#34;&gt;Windows应用商店&lt;/a&gt;下载试用。访问项目的&lt;a href=&#34;https://github.com/MilesChing/ThunderX&#34;&gt;GitHub页面&lt;/a&gt;以参考源码。&lt;/p&gt;</description>
+    </item>
+    
+  </channel>
+</rss>
