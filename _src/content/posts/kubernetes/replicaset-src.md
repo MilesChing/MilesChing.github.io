@@ -288,5 +288,47 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 
 对于 Pod 的创建、删除和修改可能带来什么？当一个 Pod 被创建或删除，如果它属于某一个 ReplicaSet 的管辖，那么该 ReplicaSet 就会因为 Pod 数量发生改变而偏离期望状态。当某个 Pod 自身被修改，它可能会由于 Label 的改变而离开原本的 ReplicaSet 而被新的 ReplicaSet 管理，也可能会因为状态的变更（原本 Active 的 Pod 不再 Active 等）而导致它所在的 ReplicaSet 偏离期望状态。
 
+[`addPod`](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L356) 会在某个新 Pod 出现在 ETCD 中时被调用，此时
 
+1. 要么 Pod 被 Controller 中的某个 Worker 创建成功，那么该 Pod 应该原本具有一个指向某 ReplicaSet 的 Owner Reference 。（在 Kubernetes 源码中许多表示 Owner Reference 的函数和变量被命名为 Controller Reference ，但这种名称容易与 Controller 混淆而造成迷惑，所以统一称为 Owner Reference）
+1. 要么 Pod 被第三方（用户或其他 Controller）创建，那么该 Pod 可能没有 Owner ，也可能属于某个 ReplicaSet 或属于某个其他类型的 Object 。
+1. 要么 Pod 并非刚刚被创建，只是刚刚被 Informer“发现”，这可能由于许多原因，例如 Controller 刚刚被启动或若干事件被 Watch 错失。此时 Pod 可能处于生命周期的任何阶段。
 
+对于已经被设置 Owner Reference 的 Pod ，除了其 Owner 本身外其他 ReplicaSet 即便拥有匹配的 Label Selector 也不会将其纳入管理，直到 Pod 被 Owner 释放即 Owner Reference 被清除后其他 ReplicaSet 才应当考虑接受并开始管理该 Pod 。因此对于这些 Pod ，`addPod` 仅将它们 Owner Reference 记录的 ReplicaSet（如果它的 Owner 并非 ReplicaSet ，则直接退出）的 Key 入队，如果该 Pod 不再匹配原有 Owner 的 Label Selector ，那么它自然会被 Control Loop 释放。
+
+```golang
+	// If it has a ControllerRef, that's all that matters.
+	if controllerRef := metav1.GetControllerOf(pod); controllerRef != nil {
+		rs := rsc.resolveControllerRef(pod.Namespace, controllerRef)
+		if rs == nil {
+			return
+		}
+		rsKey, err := controller.KeyFunc(rs)
+		if err != nil {
+			return
+		}
+		klog.V(4).Infof("Pod %s created: %#v.", pod.Name, pod)
+		rsc.expectations.CreationObserved(rsKey)
+		rsc.queue.Add(rsKey)
+		return
+	}
+```
+
+对于没有 Owner 的 Pod ，`addPod` 会将同一命名空间中，所有 ReplicaSet 中具备与当前 Pod 匹配的 Label Selector 的 ReplicaSet 的 Key 全部放入队列中。具体由哪个 ReplicaSet 接收实际上是随机的，取决于哪个 ReplicaSet 的 Key 会先被 Worker 取出。ReplicaSet 只可能管理同一命名空间中的 Pod 这一规则在这里得以体现。
+
+```golang
+	// Otherwise, it's an orphan. Get a list of all matching ReplicaSets and sync
+	// them to see if anyone wants to adopt it.
+	// DO NOT observe creation because no controller should be waiting for an
+	// orphan.
+	rss := rsc.getPodReplicaSets(pod)
+	if len(rss) == 0 {
+		return
+	}
+	klog.V(4).Infof("Orphan Pod %s created: %#v.", pod.Name, pod)
+	for _, rs := range rss {
+		rsc.enqueueRS(rs)
+	}
+```
+
+`updatePod` 的核心问题在于如何处理 Label 和 Owner Reference 的“组合变更”，而 `deletePod` 则是直接将被删除的 Pod 的 Owner 入队，考虑到 Event Handler 的大部分细节已在前面阐述，这里就不占用篇幅了。对于 Pod Event Handler ，只需注意 Pod 若已拥有 Owner ，必须先将此 Owner“唤醒”，结合其详细的注释就比较好理解了。
