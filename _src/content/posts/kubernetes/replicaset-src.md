@@ -89,3 +89,35 @@ for {
 2. 对于一个特定的 Object ，Controller 需要收集怎样的当前状态信息，以及如何使用这些状态信息来做出行为决策。涉及 Object 的全部信息一般都从 Local Cache 中获取以提升效率，有时我们也可能从外部获取一些其他信息。覆盖所有的情况且保证 Control Loop 始终是 Level Driven 的都很重要，这决定了 Control Loop 的逻辑是否有效、可靠。Control Loop 可以在一个周期内也可在多个周期内使当前状态收敛到期望状态，但要注意避免多个周期的重复操作以及非精确的操作引起的状态震荡。
 
 将这些作以总结后，我将介绍一些 ReplicaSet 具体的实现细节以作为前文抽象内容的一个具体示例。
+
+## ReplicaSet
+
+RepicaSet 是通过一组字段来定义的，包括一个用来识别其所管理的 Pod 的集合的选择算符（Label Selector），一个用来标明应该维护的副本个数的数值（Replicas），一个用来指定应该创建新 Pod 以满足副本个数条件时要使用的 Pod 模板（Pod Template）等等。ReplicaSet 对象的完整结构可在 [`types.go`](https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/api/apps/v1/types.go#L666) 查看。如其它对象一样，Spec 定义了用户对于某个 ReplicaSet 对象的期望状态，而 Status 为由 Controller 更新，显示了这个对象的当前状态。
+
+### ReplicaSet Spec
+
+- `replicas`：用户期望的副本数，默认为 1 。如果将全体被当前 ReplicaSet 所管理的 Pod 看作一个集合，Replicas 字段规定了集合的大小。ReplicaSet Controller 需要对这个集合的任何数量变化作出相应，以使其大小等于用户设定的 Replicas 。
+- `minReadySeconds`：规定新创建的 Pod 在无容器发生错误的条件下，最少准备多少秒后才可被认为 Available ，默认为 0 。
+- `selector`：即 Label Selector ，通过设定此字段规定具有怎样 Label 的 Pod 受到此 ReplicaSet 管理，即 Selector 字段定义了上文提到的“集合”。
+- `template`：即 Pod Template ，定义了当集合中 Pod 数量不足时，ReplicaSet 创建 Pod 应当使用的对象模板。
+
+### ReplicaSet Status
+
+- `replicas`：当前被 ReplicaSet 管理的 Pod 的数量。
+- `fullyLabeledReplicas`：当前被 ReplicaSet 管理的 Pod 中，具有与 Pod Template 完全相同的 Label 的 Pod 的数量。实际上被管理的 Pod 并不需要有与 Template 完全相同的 Label 也可能满足 Label Selector 的约束，这就是为什么这个字段的值可能与 replicas 不同。
+- `readyReplicas`：当前被 ReplicaSet 管理的 Pod 中处于 Ready 状态的 Pod 的数量。
+- `availableReplicas`：当前被 ReplicaSet 管理的 Pod 中被认为 Available 的 Pod 的数量。
+- `observedGeneration`：
+- `conditions`：
+
+这里需要注意“被管理”、“处于 Ready 状态”以及“被认为 Available”这几种表达方式之间的关系和细微不同，下面这张图片是一个很好的例子：
+
+NO IMAGE
+
+- **Active Pod**：Active 并非是 Pod 生命周期中的某个阶段，而是 Controller 根据 Pod 的 Phase 自行判断得出的。当某个 Pod 的 Phase 并非 Succeed 或 Failed ，则认为它是 Active 的，见函数 [`IsPodActive`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L923) 。虽然 Label Selector 定义了被 ReplicaSet 管理的合法 Pod 集合，但集合中所有 Active 的 Pod 才真正被 ReplicaSet 所管理，非 Active 的 Pod 即便符合 Label Selector 的定义也会被 ReplicaSet 忽略。
+
+> 关于 Pod 的状态和 Phase 之间的关系可参考 Pod Lifecycle 。
+
+- **Ready Pod**：Ready 为一个 Pod 现有的 Condition 之一，因此 [`IsPodReady`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/api/pod/util.go#L224) 函数仅仅检查 Pod 是否处于该状态。当 Pod 中所有容器准备就绪后，即处于 Ready 状态。
+
+- **Available Pod**：Available 也是由 Controller 自行判断得出的一个状态，当某 Pod 已处于 Ready 状态的时间超过 `minReadySeconds` ，则认为它是 Available 的。设定 Available 的概念主要就是用于在 Status 中展示当前 Available 的 Pod 数量，因此不要将它与其他状态混淆。
