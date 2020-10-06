@@ -121,3 +121,172 @@ NO IMAGE
 - **Ready Pod**：Ready 为一个 Pod 现有的 Condition 之一，因此 [`IsPodReady`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/api/pod/util.go#L224) 函数仅仅检查 Pod 是否处于该状态。当 Pod 中所有容器准备就绪后，即处于 Ready 状态。
 
 - **Available Pod**：Available 也是由 Controller 自行判断得出的一个状态，当某 Pod 已处于 Ready 状态的时间超过 `minReadySeconds` ，则认为它是 Available 的。设定 Available 的概念主要就是用于在 Status 中展示当前 Available 的 Pod 数量，因此不要将它与其他状态混淆。
+
+## ReplicaSet Controller
+
+### 功能分析
+
+针对 ReplicaSet 的结构，ReplicaSet Controller 的每个控制循环中，完成的功能主要分为两部分：
+
+- 确定被当前 ReplicaSet 管理的集合包含哪些 Pod 、不包含哪些 Pod 。ReplicaSet Controller 需要明确这些 Pod 的具体数量和唯一标识（包括 namespace 和 name）以便：
+  - 统计各种状态 Pod 的数量并更新当前 ReplicaSet 的 Status ；
+  - 设置 `metadata.ownerReferences` 字段以将当前 ReplicaSet 指定为它所管理的 Pod 的属主；
+> 某些 Kubernetes 对象是其它一些对象的属主。 例如，一个 ReplicaSet 是一组 Pod 的属主。具有属主的对象被称为是属主的附属。每个附属对象具有一个指向其所属对象的 `metadata.ownerReferences` 字段。当你删除对象时，可以指定该对象的附属是否也自动删除。自动删除附属的行为也称为级联删除（Cascading Deletion），是由垃圾收集器自动完成的，参阅[垃圾收集：属主和附属](https://kubernetes.io/zh/docs/concepts/workloads/controllers/garbage-collection/#owners-and-dependents)。
+- 根据当前被管理的 Pod 的数量作出创建 Pod 或删除 Pod 的操作以使 Pod 数量收敛到用户设定的期望值：
+  - 当 Pod 需要被创建时，使用 Pod Template 作为模板；
+  - 当现有 Pod 需要被删除时，分析并选择哪些 Pod 优先被删除；
+
+### 源码分析
+
+#### 初始化和启动
+
+构造函数 [NewReplicaSetController](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L112) 只是传递参数和初始化日志，其内部调用了 [NewBaseController](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L129) 是 ReplicaSet Controller 真正的构造函数。初始化分为三部分：
+
+首先，初始化 `ReplicaSetController` 实例，包括将输入的 Client（`podControl` 、`kubeClient` 都是 Client-go 中 Interface 提供的调用 API Server 的接口，即对 REST API 的封装）传递给 Controller 、设置 `burstReplicas` 参数（该参数是控制平台启动时设置给 Controller Manager 的，Controller Manager 在初始化 Controller 时将启动参数传入）、初始两个内部模块 `expectations` 及 `queue` 。
+
+```go
+rsc := &ReplicaSetController{
+	GroupVersionKind: gvk,
+	kubeClient:       kubeClient,
+	podControl:       podControl,
+	burstReplicas:    burstReplicas,
+	expectations:     controller.NewUIDTrackingControllerExpectations(controller.NewControllerExpectations()),
+	queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), queueName),
+}
+```
+
+第二，为 Informer 注册 Event Handler 。通过上文我们知道 Event Handler 即数据库中更改事件的回调函数。ReplicaSet Controller 使用了两个 Informer 监控 ReplicaSet 和 Pod 这两种资源。可以看到每个 EventHandler 提供了 `AddFunc` 、`UpdateFunc` 和 `DeleteFunc` 这三个事件。
+
+```go
+rsInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	AddFunc:    rsc.addRS,
+	UpdateFunc: rsc.updateRS,
+	DeleteFunc: rsc.deleteRS,
+})
+
+podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	AddFunc: rsc.addPod,
+	// This invokes the ReplicaSet for every pod change, eg: host assignment. Though this might seem like
+	// overkill the most frequent pod update is status, and the associated ReplicaSet will only list from
+	// local storage, so it should be ok.
+	UpdateFunc: rsc.updatePod,
+	DeleteFunc: rsc.deletePod,
+})
+```
+
+第三，从 Informer 中获取 Lister 和表示 Lister 是否同步完成的函数，仅仅是记录在成员中便于使用。
+
+```go
+rsc.rsLister = rsInformer.Lister()
+rsc.rsListerSynced = rsInformer.Informer().HasSynced
+
+rsc.podLister = podInformer.Lister()
+rsc.podListerSynced = podInformer.Informer().HasSynced
+```
+
+#### ReplicaSet Event Handlers
+
+[`addRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L284) 在有 ReplicaSet 被创建（Informer 发现从前未出现过的 ReplicaSet）时被调用。它仅仅输出了日志并将被创建的 ReplicaSet 的 Key 直接加入队列，因为新出现的 ReplicaSet 显然有可能处于非期望状态。
+
+```go
+func (rsc *ReplicaSetController) addRS(obj interface{}) {
+	rs := obj.(*apps.ReplicaSet)
+	klog.V(4).Infof("Adding %s %s/%s", rsc.Kind, rs.Namespace, rs.Name)
+	rsc.enqueueRS(rs)
+}
+```
+
+修改 ReplicaSet 的许多字段都会导致这个对象变得需要被处理，如改变 Label Selector 使其管理不同的 Pod 集合、改变 Replicas 使其现有的 Pod 数量不再满足期望等。 [`updateRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L291) 可能在几种情况下被调用：
+
+1. 某 ReplicaSet 被使用 Update 或 Patch 方法更改，触发 Update 事件；
+1. 在 Periodic Resync 的过程中，所有 ReplicaSet 都会被触发 Update 事件；
+1. 某个旧 ReplicaSet 被删除（删除之前可能被进行若干次修改），后一个新的有同样 Namespaced Name 的 ReplicaSet 被创建出来，如果删除事件被 Informer 错失的话，它是无法区分新旧 ReplicaSet 的，因此它认为发生了一次 Update；
+
+```go
+func (rsc *ReplicaSetController) updateRS(old, cur interface{}) {
+	oldRS := old.(*apps.ReplicaSet)
+	curRS := cur.(*apps.ReplicaSet)
+```
+
+首先处理第三种情况，通过检查每个 Object 唯一的 [UID](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids) 就可判断出 `oldRS` 和 `curRS` 是不是同一个对象。对于这种情况，产生一个 `DeletedFinalStateUnknown` 给删除事件的回调 `deleteRS` 。前文已经提到过，`DeletedFinalStateUnknown` 用于表示某个 Object 被删除了，但被删除时的最后状态未知。
+
+> Every object created over the whole lifetime of a Kubernetes cluster has a distinct UID. It is intended to distinguish between historical occurrences of similar entities.
+
+```go
+	// TODO: make a KEP and fix informers to always call the delete event handler on re-create
+	if curRS.UID != oldRS.UID {
+		key, err := controller.KeyFunc(oldRS)
+		if err != nil {
+			utilruntime.HandleError(fmt.Errorf("couldn't get key for object %#v: %v", oldRS, err))
+			return
+		}
+		rsc.deleteRS(cache.DeletedFinalStateUnknown{
+			Key: key,
+			Obj: oldRS,
+		})
+	}
+```
+
+直接将新的 ReplicaSet 的 Key 进队，这里“新的”Key 的说法其实只适用于第三种情况，其他情况 Key 应当是不变的。情况一和情况二中 ReplicaSet 都会被直接进队，这里的注释也就是在解释为什么没有过滤掉情况二那些实际上没发生改变但是被触发的 ReplicaSet ，大意就是每隔一段时间就让所有 ReplicaSet 进队一次是更安全的选择，可以防止由于创建或删除 Pod 失败导致对应的 ReplicaSet 的 Update 永远不会被任何事触发（ReplicaSet 创建或删除 Pod 的过程不是阻塞的，稍后我们会提到），且有许多机制例如 Expectations 可以降低这种大量入队处理的开销。
+
+```go
+	// You might imagine that we only really need to enqueue the
+	// replica set when Spec changes, but it is safer to sync any
+	// time this function is triggered. That way a full informer
+	// resync can requeue any replica set that don't yet have pods
+	// but whose last attempts at creating a pod have failed (since
+	// we don't block on creation of pods) instead of those
+	// replica sets stalling indefinitely. Enqueueing every time
+	// does result in some spurious syncs (like when Status.Replica
+	// is updated and the watch notification from it retriggers
+	// this function), but in general extra resyncs shouldn't be
+	// that bad as ReplicaSets that haven't met expectations yet won't
+	// sync, and all the listing is done using local stores.
+	if *(oldRS.Spec.Replicas) != *(curRS.Spec.Replicas) {
+		klog.V(4).Infof("%v %v updated. Desired pod count change: %d->%d", rsc.Kind, curRS.Name, *(oldRS.Spec.Replicas), *(curRS.Spec.Replicas))
+	}
+	rsc.enqueueRS(curRS)
+}
+```
+
+[`deleteRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L326) 的触发有两种情况，即 API Server 告知 Informer 有 Object 被删除或 Informer 自行产生的 `DeletedFinalStateUnknown` 。这里只是简单的对参数的类型进行了判断，如果传入的 `obj` 是一个 `DeletedFinalStateUnknown` 那么从中取出真正的 ReplicaSet 进行后面的处理。实际上处理也仅仅是将对应的 ReplicaSet Key 入队。
+
+```go
+func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
+	rs, ok := obj.(*apps.ReplicaSet)
+	if !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			utilruntime.HandleError(fmt.Errorf("couldn't get object from tombstone %#v", obj))
+			return
+		}
+		rs, ok = tombstone.Obj.(*apps.ReplicaSet)
+		if !ok {
+			utilruntime.HandleError(fmt.Errorf("tombstone contained object that is not a ReplicaSet %#v", obj))
+			return
+		}
+	}
+
+	key, err := controller.KeyFunc(rs)
+	if err != nil {
+		utilruntime.HandleError(fmt.Errorf("couldn't get key for object %#v: %v", rs, err))
+		return
+	}
+
+	klog.V(4).Infof("Deleting %s %q", rsc.Kind, key)
+
+	// Delete expectations for the ReplicaSet so if we create a new one with the same name it starts clean
+	rsc.expectations.DeleteExpectations(key)
+
+	rsc.queue.Add(key)
+}
+```
+
+值得注意的是这里第一次出现了 Expectations 的概念，我们暂时忽略这些对于 Expectations 的调用，在 Control Loop 中再来讨论它的作用。
+
+#### Pod Event Handlers
+
+对于 Pod 的创建、删除和修改可能带来什么？当一个 Pod 被创建或删除，如果它属于某一个 ReplicaSet 的管辖，那么该 ReplicaSet 就会因为 Pod 数量发生改变而偏离期望状态。当某个 Pod 自身被修改，它可能会由于 Label 的改变而离开原本的 ReplicaSet 而被新的 ReplicaSet 管理，也可能会因为状态的变更（原本 Active 的 Pod 不再 Active 等）而导致它所在的 ReplicaSet 偏离期望状态。
+
+
+
