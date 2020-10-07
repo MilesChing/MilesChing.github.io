@@ -184,6 +184,37 @@ rsc.podLister = podInformer.Lister()
 rsc.podListerSynced = podInformer.Informer().HasSynced
 ```
 
+Controller Manager 在启动时会在单独的 Go Routine 调用 Controller 的 `Run` 方法：
+
+```golang
+func (rsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
+	defer utilruntime.HandleCrash()
+	defer rsc.queue.ShutDown()
+
+	controllerName := strings.ToLower(rsc.Kind)
+	klog.Infof("Starting %v controller", controllerName)
+	defer klog.Infof("Shutting down %v controller", controllerName)
+```
+
+`Run` 的逻辑也比较简单，首先等待 Informer 中的 Local Cache 首次与 ETCD 同步完成：
+
+```golang
+	if !cache.WaitForNamedCacheSync(rsc.Kind, stopCh, rsc.podListerSynced, rsc.rsListerSynced) {
+		return
+	}
+```
+
+接着使用 `wait.Until` 每秒创建一定数量的 `worker` 处理 Work Queue 中的对象索引。
+
+```golang
+	for i := 0; i < workers; i++ {
+		go wait.Until(rsc.worker, time.Second, stopCh)
+	}
+
+	<-stopCh
+}
+```
+
 #### Event Handlers
 
 Event Handler 是将 Edge Driven 转化为 Level Driven 的关键，也是触发 Worker 中的 Control Loop 完成 “Check this X” 的关键。这些 Control Loop 何时针对哪个 ReplicaSet 实例执行，取决于 Event Handler 何时将哪个 ReplicaSet 的 Key 放入工作队列，通过这种方式 Event Handler 将某个 Worker “唤醒” 开始针对目标 ReplicaSet 进行控制，也可理解为 Event Handler 将被放入队列的 ReplicaSet “唤醒” 以进行其控制工作。
@@ -412,3 +443,55 @@ func (rsc *ReplicaSetController) updatePod(old, cur interface{}) {
 ```
 
 [`deletePod`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L477) 的工作则是直接唤醒被删除的 Pod 的属主。考虑到 Event Handler 的大部分细节已在前面阐述，这里就不占用篇幅了。对于 Pod Event Handler ，只需注意 Pod 若已拥有 Owner ，必须先将此 Owner 唤醒，结合其详细的注释就比较好理解了。
+
+#### Worker
+
+Worker 并行运行 Control Loop 。启动方法 `Run` 中每隔一秒会创建出一些运行 `worker` 函数的 Go Routine ，证明它们并不是一些长期运行的 Routine ，不然也不会需要频繁创建。的确如此，[`worker`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L518) 只有三行：
+
+```golang
+// worker runs a worker thread that just dequeues items, processes them, and marks them done.
+// It enforces that the syncHandler is never invoked concurrently with the same key.
+func (rsc *ReplicaSetController) worker() {
+	for rsc.processNextWorkItem() {
+	}
+}
+```
+
+##### Process Next Work Item
+
+看上去当 `processNextWorkItem` 返回 `false` 时 `worker` 就会退出，那么 [`processNextWorkItem`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L523) 就应当是从 Work Queue 中取出单个 Item 并处理的逻辑：
+
+```golang
+func (rsc *ReplicaSetController) processNextWorkItem() bool {
+	key, quit := rsc.queue.Get()
+	if quit {
+		return false
+	}
+	defer rsc.queue.Done(key)
+
+	err := rsc.syncHandler(key.(string))
+	if err == nil {
+		rsc.queue.Forget(key)
+		return true
+	}
+
+	utilruntime.HandleError(fmt.Errorf("sync %q failed with %v", key, err))
+	rsc.queue.AddRateLimited(key)
+
+	return true
+}
+```
+
+为了让这段代码变得清晰这里稍微解释一下 `queue` 的接口：
+
+- `Get` 自然是从 Queue 中 Pop 一个 Item ，该 Item 被取出的同时会在队列中标记为 “正在处理” ，如果队列为空会返回 `quit` 为真；
+- `Done` 表示告知队列某个 Item 已经成功处理完成；
+- `AddRateLimited` 和 `Forget` 是 `RateLimitedQueue` 所实现的 `RateLimitingInterface` 中的方法。`RateLimitedQueue` 可对元素的入队次数进行统计，并阻止某一元素次数过多，这里用来限制单个对象的重试次数。
+	- `AddRateLimited` 为在现有重试次数允许的情况下将 Item 加入队列，若 Item 已被重试过多次，则进队请求被直接忽略；
+	- `Forget` 将对应 Item 的 重试次数清空，在 Item 处理成功后被调用；
+
+因此 `processNextWorkItem` 仍是对 Control Loop 的一个封装：它获取一个新的 Item ，通过 `syncHandler` 对其进行处理，若处理过程中发生错误，则尝试将该 Item 重新加入队列进行重试，重试次数过多的对象将被忽略。只有队列为空时，`processNextWorkItem` 会返回 `false` 来终止 `worker` 。`syncHandler` 的逻辑则是真正的 Control Loop ，它其实是函数 `syncReplicaSet` 。
+
+##### Sync ReplicaSet
+
+
