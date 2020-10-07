@@ -112,33 +112,23 @@ RepicaSet 是通过一组字段来定义的，包括一个用来识别其所管�
 
 这里需要注意 “被管理” 、“处于 Ready 状态” 以及 “被认为 Available” 这几种表达方式之间的关系和细微不同，下面这张图片是一个很好的例子：
 
-NO IMAGE
+- **Owned Pod** ：被管理的 Pod（或 ReplicaSet 拥有的 Pod）即 ReplicaSet 中的 “Set” 中的 Pod 。当某个 Pod 与 Label Selector 相匹配它将立即被 ReplicaSet 接收，即被添加到集合中，当集合中的某个 Pod（通过修改 Label 等方式）不再匹配 Label Selector 它将立即被释放，即从集合中移出。某个 Pod 是否被另一个 ReplicaSet 的判断标准是它的 `ownerReference` 字段是否指向该 ReplicaSet。
 
-- **Active Pod**：Active 并非是 Pod 生命周期中的某个阶段，而是 Controller 根据 Pod 的 Phase 自行判断得出的。当某个 Pod 的 Phase 并非 Succeed 或 Failed ，则认为它是 Active 的，见函数 [`IsPodActive`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L923) 。虽然 Label Selector 定义了被 ReplicaSet 管理的合法 Pod 集合，但集合中所有 Active 的 Pod 才真正被 ReplicaSet 所管理，非 Active 的 Pod 即便符合 Label Selector 的定义也会被 ReplicaSet 忽略。
+> 选自 [垃圾收集 - 属主和附属](https://kubernetes.io/zh/docs/concepts/workloads/controllers/garbage-collection/#owners-and-dependents)：某些 Kubernetes 对象是其它一些对象的属主。例如，一个 ReplicaSet 是一组 Pod 的属主。具有属主的对象被称为是属主的附属 。每个附属对象具有一个指向其所属对象的 `metadata.ownerReferences` 字段。你也可以通过手动设置 `ownerReference` 的值，来指定属主和附属之间的关系。
 
-> 关于 Pod 的状态和 Phase 之间的关系可参考 Pod Lifecycle 。
+- **Active Pod** ：Active 并非是 Pod 生命周期中的某个阶段，而是 Controller 根据 Pod 的 Phase 自行判断得出的。当某个 Pod 的 Phase 并非 Succeed 或 Failed ，则认为它是 Active 的，见函数 [`IsPodActive`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L923) 。虽然 Label Selector 定义了被 ReplicaSet 管理的合法 Pod 集合，但集合中所有 Active 的 Pod 才真正被 ReplicaSet 所管理，非 Active 的 Pod 即便符合 Label Selector 的定义也会被 ReplicaSet 忽略。
 
-- **Ready Pod**：Ready 为一个 Pod 现有的 Condition 之一，因此 [`IsPodReady`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/api/pod/util.go#L224) 函数仅仅检查 Pod 是否处于该状态。当 Pod 中所有容器准备就绪后，即处于 Ready 状态。
+> 关于 Pod 的状态和 Phase 之间的关系可参考 [Pod Lifecycle](https://kubernetes.io/zh/docs/concepts/workloads/pods/pod-lifecycle/) 。
 
-- **Available Pod**：Available 也是由 Controller 自行判断得出的一个状态，当某 Pod 已处于 Ready 状态的时间超过 `minReadySeconds` ，则认为它是 Available 的。设定 Available 的概念主要就是用于在 Status 中展示当前 Available 的 Pod 数量，因此不要将它与其他状态混淆。
+- **Ready Pod** ：Ready 为一个 Pod 现有的 Condition 之一，因此 [`IsPodReady`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/api/pod/util.go#L224) 函数仅仅检查 Pod 是否处于该状态。当 Pod 中所有容器准备就绪后，即处于 Ready 状态。
 
-## ReplicaSet Controller
+- **Available Pod** ：Available 也是由 Controller 自行判断得出的一个状态，当某 Pod 已处于 Ready 状态的时间超过 `minReadySeconds` ，则认为它是 Available 的。设定 Available 的概念主要就是用于在 Status 中展示当前 Available 的 Pod 数量，因此不要将它与其他状态混淆。
 
-### 功能分析
+## ReplicaSet Controller 实现细节
 
-针对 ReplicaSet 的结构，ReplicaSet Controller 的每个控制循环中，完成的功能主要分为两部分：
+ReplicaSet Controller 的总体结构和各模块的职责与上面我们介绍的 Controller 一般结构类似，只是多出了 Expectations 模块。因此我们在这一小节中直接分为初始化和启动流程、Event Handlers 、Workers 和 Expectations 四部分来介绍具体的实现细节。
 
-- 确定被当前 ReplicaSet 管理的集合包含哪些 Pod 、不包含哪些 Pod 。ReplicaSet Controller 需要明确这些 Pod 的具体数量和唯一标识（包括 namespace 和 name）以便：
-  - 统计各种状态 Pod 的数量并更新当前 ReplicaSet 的 Status ；
-  - 设置 `metadata.ownerReferences` 字段以将当前 ReplicaSet 指定为它所管理的 Pod 的属主；
-> 某些 Kubernetes 对象是其它一些对象的属主。 例如，一个 ReplicaSet 是一组 Pod 的属主。具有属主的对象被称为是属主的附属。每个附属对象具有一个指向其所属对象的 `metadata.ownerReferences` 字段。当你删除对象时，可以指定该对象的附属是否也自动删除。自动删除附属的行为也称为级联删除（Cascading Deletion），是由垃圾收集器自动完成的，参阅[垃圾收集：属主和附属](https://kubernetes.io/zh/docs/concepts/workloads/controllers/garbage-collection/#owners-and-dependents)。
-- 根据当前被管理的 Pod 的数量作出创建 Pod 或删除 Pod 的操作以使 Pod 数量收敛到用户设定的期望值：
-  - 当 Pod 需要被创建时，使用 Pod Template 作为模板；
-  - 当现有 Pod 需要被删除时，分析并选择哪些 Pod 优先被删除；
-
-### 源码分析
-
-#### 初始化和启动
+### 初始化和启动
 
 构造函数 [NewReplicaSetController](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L112) 只是传递参数和初始化日志，其内部调用了 [NewBaseController](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L129) 是 ReplicaSet Controller 真正的构造函数。初始化分为三部分：
 
@@ -186,7 +176,7 @@ rsc.podListerSynced = podInformer.Informer().HasSynced
 
 Controller Manager 在启动时会在单独的 Go Routine 调用 Controller 的 `Run` 方法：
 
-```golang
+```go
 func (rsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer rsc.queue.ShutDown()
@@ -198,7 +188,7 @@ func (rsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 
 `Run` 的逻辑也比较简单，首先等待 Informer 中的 Local Cache 首次与 ETCD 同步完成：
 
-```golang
+```go
 	if !cache.WaitForNamedCacheSync(rsc.Kind, stopCh, rsc.podListerSynced, rsc.rsListerSynced) {
 		return
 	}
@@ -206,7 +196,7 @@ func (rsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 
 接着使用 `wait.Until` 每秒创建一定数量的 `worker` 处理 Work Queue 中的对象索引。
 
-```golang
+```go
 	for i := 0; i < workers; i++ {
 		go wait.Until(rsc.worker, time.Second, stopCh)
 	}
@@ -215,11 +205,11 @@ func (rsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 }
 ```
 
-#### Event Handlers
+### Event Handlers
 
 Event Handler 是将 Edge Driven 转化为 Level Driven 的关键，也是触发 Worker 中的 Control Loop 完成 “Check this X” 的关键。这些 Control Loop 何时针对哪个 ReplicaSet 实例执行，取决于 Event Handler 何时将哪个 ReplicaSet 的 Key 放入工作队列，通过这种方式 Event Handler 将某个 Worker “唤醒” 开始针对目标 ReplicaSet 进行控制，也可理解为 Event Handler 将被放入队列的 ReplicaSet “唤醒” 以进行其控制工作。
 
-##### Add ReplicaSet
+#### Add ReplicaSet
 
 [`addRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L284) 在有 ReplicaSet 被创建（Informer 发现从前未出现过的 ReplicaSet）时被调用。它仅仅输出了日志并将被创建的 ReplicaSet 的 Key 直接加入队列，因为新出现的 ReplicaSet 显然有可能处于非期望状态。
 
@@ -231,7 +221,7 @@ func (rsc *ReplicaSetController) addRS(obj interface{}) {
 }
 ```
 
-##### Update ReplicaSet
+#### Update ReplicaSet
 
 修改 ReplicaSet 的许多字段都会导致这个对象变得需要被处理，如改变 Label Selector 使其管理不同的 Pod 集合、改变 Replicas 使其现有的 Pod 数量不再满足期望等。 [`updateRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L291) 可能在几种情况下被调用：
 
@@ -286,7 +276,7 @@ func (rsc *ReplicaSetController) updateRS(old, cur interface{}) {
 }
 ```
 
-##### Delete ReplicaSet
+#### Delete ReplicaSet
 
 [`deleteRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L326) 的触发有两种情况，即 API Server 告知 Informer 有 Object 被删除或 Informer 自行产生的 `DeletedFinalStateUnknown` 。这里只是简单的对参数的类型进行了判断，如果传入的 `obj` 是一个 `DeletedFinalStateUnknown` 那么从中取出真正的 ReplicaSet 进行后面的处理。实际上处理也仅仅是将对应的 ReplicaSet 唤醒。
 
@@ -323,7 +313,7 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 
 值得注意的是这里第一次出现了 Expectations 的概念，我们暂时忽略这些对于 Expectations 的调用，在 Control Loop 中再来讨论它的作用。
 
-##### Add Pod
+#### Add Pod
 
 对于 Pod 的创建、删除和修改可能带来什么？当一个 Pod 被创建或删除，如果它属于某一个 ReplicaSet 的管辖，那么该 ReplicaSet 就会因为 Pod 数量发生改变而偏离期望状态。当某个 Pod 自身被修改，它可能会由于 Label 的改变而离开原本的 ReplicaSet 而被新的 ReplicaSet 管理，也可能会因为状态的变更（原本 Active 的 Pod 不再 Active 等）而导致它所在的 ReplicaSet 偏离期望状态。
 
@@ -335,7 +325,7 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 
 对于已经被设置 Owner Reference 的 Pod ，除了其 Owner 本身外其他 ReplicaSet 即便拥有匹配的 Label Selector 也不会将其纳入管理，直到 Pod 被 Owner 释放即 Owner Reference 被清除后其他 ReplicaSet 才应当考虑接受并开始管理该 Pod 。因此对于这些 Pod ，`addPod` 仅将它们 Owner Reference 记录的 ReplicaSet（如果它的 Owner 并非 ReplicaSet ，则直接退出）唤醒，如果该 Pod 不再匹配原有 Owner 的 Label Selector ，那么它自然会被 Control Loop 释放。
 
-```golang
+```go
 	// If it has a ControllerRef, that's all that matters.
 	if controllerRef := metav1.GetControllerOf(pod); controllerRef != nil {
 		rs := rsc.resolveControllerRef(pod.Namespace, controllerRef)
@@ -355,7 +345,7 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 
 对于没有 Owner 的 Pod ，`addPod` 会将同一命名空间中，所有 ReplicaSet 中具备与当前 Pod 匹配的 Label Selector 的 ReplicaSet 全部唤醒。道理上看它们都应当管理该 Pod ，但每个 Pod 不能由多个 ReplicaSet 同时管理，具体由哪个 ReplicaSet 接收实际上是随机的，取决于哪个 ReplicaSet 的 Key 会先被 Worker 取出并抢先设置 Owner Reference 。另外，ReplicaSet 只可能管理同一命名空间中的 Pod 这一规则在这里得以体现。
 
-```golang
+```go
 	// Otherwise, it's an orphan. Get a list of all matching ReplicaSets and sync
 	// them to see if anyone wants to adopt it.
 	// DO NOT observe creation because no controller should be waiting for an
@@ -370,11 +360,11 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 	}
 ```
 
-##### Update Pod
+#### Update Pod
 
 [`updatePod`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L403) 的核心问题在于如何处理 Label 和 Owner Reference 的 “组合变更” ，这两个字段都允许被外部更改，因此必须对这种复杂的情况加以分析。不过在此之前，它首先过滤掉了 Periodical Resync 产生的大量事件，通过判断 `ResourceVersion` 可以做到这一点，具体原因可参考 [Efficient detection of changes](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes) 。
 
-```golang
+```go
 func (rsc *ReplicaSetController) updatePod(old, cur interface{}) {
 	curPod := cur.(*v1.Pod)
 	oldPod := old.(*v1.Pod)
@@ -389,7 +379,7 @@ func (rsc *ReplicaSetController) updatePod(old, cur interface{}) {
 
 对于 Label 和 Owner Reference 的处理思路是这样的：如果 Owner Reference 变化了，这可能表明 Pod 被从它旧的属主那里主动地释放或被动地剥夺了，我们无法区分这两种情况，必须唤醒旧的属主（假如有）以告知它这一事件。类似地，如果 Pod 被指定了一个新的属主，我们同样需要唤醒新属主，并且在这种情况下，Label 的不需要再被考虑，因为已有属主的 Pod 不会被其他 ReplicaSet 管理。
 
-```golang
+```go
 	curControllerRef := metav1.GetControllerOf(curPod)
 	oldControllerRef := metav1.GetControllerOf(oldPod)
 	controllerRefChanged := !reflect.DeepEqual(curControllerRef, oldControllerRef)
@@ -427,7 +417,7 @@ func (rsc *ReplicaSetController) updatePod(old, cur interface{}) {
 
 若 Pod 没有被指定属主，我们需要考虑 Label 的变化，即像 `addPod` 中所作的一样唤醒所有可能作为属主的 ReplicaSet 。
 
-```golang
+```go
 	// Otherwise, it's an orphan. If anything changed, sync matching controllers
 	// to see if anyone wants to adopt it now.
 	if labelChanged || controllerRefChanged {
@@ -444,11 +434,11 @@ func (rsc *ReplicaSetController) updatePod(old, cur interface{}) {
 
 [`deletePod`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L477) 的工作则是直接唤醒被删除的 Pod 的属主。考虑到 Event Handler 的大部分细节已在前面阐述，这里就不占用篇幅了。对于 Pod Event Handler ，只需注意 Pod 若已拥有 Owner ，必须先将此 Owner 唤醒，结合其详细的注释就比较好理解了。
 
-#### Worker
+### Worker
 
 Worker 并行运行 Control Loop 。启动方法 `Run` 中每隔一秒会创建出一些运行 `worker` 函数的 Go Routine ，证明它们并不是一些长期运行的 Routine ，不然也不会需要频繁创建。的确如此，[`worker`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L518) 只有三行：
 
-```golang
+```go
 // worker runs a worker thread that just dequeues items, processes them, and marks them done.
 // It enforces that the syncHandler is never invoked concurrently with the same key.
 func (rsc *ReplicaSetController) worker() {
@@ -457,11 +447,11 @@ func (rsc *ReplicaSetController) worker() {
 }
 ```
 
-##### Process Next Work Item
+#### Process Next Work Item
 
 看上去当 `processNextWorkItem` 返回 `false` 时 `worker` 就会退出，那么 [`processNextWorkItem`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L523) 就应当是从 Work Queue 中取出单个 Item 并处理的逻辑：
 
-```golang
+```go
 func (rsc *ReplicaSetController) processNextWorkItem() bool {
 	key, quit := rsc.queue.Get()
 	if quit {
@@ -492,6 +482,74 @@ func (rsc *ReplicaSetController) processNextWorkItem() bool {
 
 因此 `processNextWorkItem` 仍是对 Control Loop 的一个封装：它获取一个新的 Item ，通过 `syncHandler` 对其进行处理，若处理过程中发生错误，则尝试将该 Item 重新加入队列进行重试，重试次数过多的对象将被忽略。只有队列为空时，`processNextWorkItem` 会返回 `false` 来终止 `worker` 。`syncHandler` 的逻辑则是真正的 Control Loop ，它其实是函数 `syncReplicaSet` 。
 
-##### Sync ReplicaSet
+#### Sync ReplicaSet
 
+[`syncReplicaSet`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L650) 即 Control Loop 。在每个 Loop 中，Controller 获取目标 ReplicaSet 的 Current State 和 Desired State ，并作出具体的行为完成 ReplicaSet 所承诺的功能。
 
+在函数的开始，根据本次 Control Loop 的目标 ReplicaSet 的 Key 从 Local Cache 中拿到目标 ReplicaSet 的最新 Object 。
+
+```go
+// syncReplicaSet will sync the ReplicaSet with the given key if it has had its expectations fulfilled,
+// meaning it did not expect to see any more of its pods created or deleted. This function is not meant to be
+// invoked concurrently with the same key.
+func (rsc *ReplicaSetController) syncReplicaSet(key string) error {
+	startTime := time.Now()
+	defer func() {
+		klog.V(4).Infof("Finished syncing %v %q (%v)", rsc.Kind, key, time.Since(startTime))
+	}()
+
+	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		return err
+	}
+	rs, err := rsc.rsLister.ReplicaSets(namespace).Get(name)
+	if errors.IsNotFound(err) {
+		klog.V(4).Infof("%v %v has been deleted", rsc.Kind, key)
+		rsc.expectations.DeleteExpectations(key)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+```
+
+> Control Loop 总是在开始时读取目标 Object 的一切 “最新” 状态，这是因为 Control Loop 必须保证其 Edge Driven 特性，也就是说当某些 ReplicaSet 对象被入队，那可能是由于某个原本属于它的 Pod 被删除或它本身的 Label Selector 被更改等，但这些对 Control Loop 是透明的，Control Loop 必须通过获取对象现有状态，观察现有状态与期望状态的差异来决定自己的行为。这也解释了为什么 Work Queue 中仅仅存储 Object Key 而不包含其他信息，以及为什么需要维护 Local Cache 来避免 Control Loop 大量的状态读取给 API Server 造成负担（尽管如此，在某些需要获取最最最新对象状态的场景下还是需要单独从 API Server 进行请求的，Local Cache 与 ETCD 会有一些不同步）。
+
+按照 Control Loop 的职责，我们需要获取目标 ReplicaSet 的当前状态和期望状态。什么叫做一个 ReplicaSet 的当前状态和期望状态？这是根据该 Object 所承诺的功能决定的：
+
+##### 维护正确的 Pod 集合
+
+首先，ReplicaSet 总会按照设定给它的 Label Selector 来接收或释放 Pod ，即正确设定相关 Pod 的 Owner Reference ，且当前被管理的各种类型的 Pod 数量总会被正确设定到 Status 中的字段上；<b>此时，一个 ReplicaSet 当前状态与期望状态之间的差异体现在由 Label Selector 定义的应当被它管理的 Pod 集合与实际上拥有指向它的 Owner Reference 的 Pod 集合的差异。</b>因此 Controller 从 Local Cache 中得到一份处于相同 Namespace 的全部 Pod 的列表，并从中筛选出目标 ReplicaSet 应当管理的 Pod 集合。
+
+```go
+selector, err := metav1.LabelSelectorAsSelector(rs.Spec.Selector)
+if err != nil {
+	utilruntime.HandleError(fmt.Errorf("error converting pod selector to selector: %v", err))
+	return nil
+}
+
+// list all pods to include the pods that don't match the rs`s selector
+// anymore but has the stale controller ref.
+// TODO: Do the List and Filter in a single pass, or use an index.
+allPods, err := rsc.podLister.Pods(rs.Namespace).List(labels.Everything())
+if err != nil {
+	return err
+}
+// Ignore inactive pods.
+filteredPods := controller.FilterActivePods(allPods)
+```
+
+使用 [`claimPods`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L717)（内部其实使用了 `PodControllerRefManager` ，具体的实现还是比较易懂的）即可纠正现有集合：对于不该被管理的 Pod 清除 Owner Reference ，对于该管理但未管理的 Pod 添加 Owner Reference 即可。
+
+```go
+// NOTE: filteredPods are pointing to objects from cache - if you need to
+// modify them, you need to copy it first.
+filteredPods, err = rsc.claimPods(rs, selector, filteredPods)
+if err != nil {
+	return err
+}
+```
+
+##### 保证 Pod 集合的大小
+
+其次，ReplicaSet 总会创建或删除 Pod 保证被管理的 Pod 总数等于 Replicas（尽管创建或删除之前或过程中 Pod 数量可能暂时地不满足期望，我们都知道不可能做到 Pod 数量恒定于期望值）；<b>此时，一个 ReplicaSet 当前状态与期望状态之间的差异体现在被它管理的 Pod 数量与 Replicas 之间的差异。</b>
