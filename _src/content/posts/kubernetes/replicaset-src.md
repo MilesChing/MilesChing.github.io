@@ -14,7 +14,7 @@ Kubernetes 的声明式（Declarative）接口不仅是与命令式接口并列�
 
 > 在机器人技术和自动化技术中，控制循环是调节系统状态的无终止循环。
 
-Kubernetes Controller 是监视集群状态的控制循环，在每个循环中根据需要做出或请求更改。每个 Controller 监控至少一个 Kubernetes 资源类型，负责其全部对象实例的正常功能，试图做出行为将当前的集群状态移动到更接近期望的状态。这些对象一般具有表示所需状态的 Spec 字段和表示当前状态的 Status 字段。Spec 是让用户写入期望的状态，系统可以通过 Spec 读出用户的期望。Status 是系统写入观察到的状态，用户可以从中读出系统当前是什么状态。Controller 用以维护集群的这些“行为”绝大多数通过调用 API Server 得以完成，且大多数同样是基于声明式系统的。举例来说，ReplicaSet 是一个负责调整 Container 数量的 Controller ，但它在需要创建和删除 Container 时仅仅需要在数据库中创建或删除 Pod 对象即可，Pod Controller 会立即关注到这些改动并实际创建出所需的 Container 以完成它的工作。在这个过程中 API Server 提供了在数据库中创建、删除和修改对象的统一接口，但实际工作是由 Controller 完成的。实际上这种通过 Object 的交互是 Controller 之间协作的普遍方式（如 Deployment 与 ReplicaSet 的协作）。
+Kubernetes Controller 是监视集群状态的控制循环，在每个循环中根据需要做出或请求更改。每个 Controller 监控至少一个 Kubernetes 资源类型，负责其全部对象实例的正常功能，试图做出行为将当前的集群状态移动到更接近期望的状态。这些对象一般具有表示所需状态的 Spec 字段和表示当前状态的 Status 字段。Spec 是让用户写入期望的状态，系统可以通过 Spec 读出用户的期望。Status 是系统写入观察到的状态，用户可以从中读出系统当前是什么状态。Controller 用以维护集群的这些 “行为” 绝大多数通过调用 API Server 得以完成，且大多数同样是基于声明式系统的。举例来说，ReplicaSet 是一个负责调整 Container 数量的 Controller ，但它在需要创建和删除 Container 时仅仅需要在数据库中创建或删除 Pod 对象即可，Pod Controller 会立即关注到这些改动并实际创建出所需的 Container 以完成它的工作。在这个过程中 API Server 提供了在数据库中创建、删除和修改对象的统一接口，但实际工作是由 Controller 完成的。实际上这种通过 Object 的交互是 Controller 之间协作的普遍方式（如 Deployment 与 ReplicaSet 的协作）。
 
 ### Controller Manager
 
@@ -24,11 +24,11 @@ Kubernetes Controller 是监视集群状态的控制循环，在每个循环中�
 
 ### Controller 设计思想
 
-总结起来，Controller 的工作即监控用户定义的对象并在 Status 与 Spec 不一致时采取相应的行动，这种“监控”是以 Control Loop 的形式完成的。声明式的用户交互以及控制循环式的 Controller 使我们得以让整个控制行为变得无状态（Stateless），而无状态恰恰是 Kubernetes 保证可靠性的关键。<b>这里的无状态并不是指控制系统不存储状态或不依赖当前状态，而是指控制系统没有对过去状态的依赖，或不要求在时间上具有控制的“连续性”。</b>通俗地讲，这样的控制系统可以在任何时候重启，因为它仅仅针对当前状态与期望状态的差异行事，而不依赖之前发生了什么，也就是说它可以在任何时候崩溃，我们只需要保证系统能被及时重新启动。这种只依赖当前状态的“无状态”也可称为基于水平触发的（Level Driven），它的对立面边缘触发的（Edge Driven）或基于事件的。
+总结起来，Controller 的工作即监控用户定义的对象并在 Status 与 Spec 不一致时采取相应的行动，这种 “监控” 是以 Control Loop 的形式完成的。声明式的用户交互以及控制循环式的 Controller 使我们得以让整个控制行为变得无状态（Stateless），而无状态恰恰是 Kubernetes 保证可靠性的关键。<b>这里的无状态并不是指控制系统不存储状态或不依赖当前状态，而是指控制系统没有对过去状态的依赖，或不要求在时间上具有控制的“连续性”。</b>通俗地讲，这样的控制系统可以在任何时候重启，因为它仅仅针对当前状态与期望状态的差异行事，而不依赖之前发生了什么，也就是说它可以在任何时候崩溃，我们只需要保证系统能被及时重新启动。这种只依赖当前状态的 “无状态” 也可称为基于水平触发的（Level Driven），它的对立面边缘触发的（Edge Driven）或基于事件的。
 
 ![Level Driven](https://www.oreilly.com/library/view/programming-kubernetes/9781492047094/assets/prku_0103.png)
 
-上图选自 [*Programming Kubernetes by Michael Hausenblas, Stefan Schimanski*](https://learning.oreilly.com/library/view/programming-kubernetes/9781492047094/) ，形象地描述了 Controller 这种 Level Driven 的思想。实际上水平触发虽然不依赖历史状态，但总是显得不如边缘触发那样有效率，因为我们一般必须使用轮询的方法以不断检测边缘，正如图中的“get-compare-update”过程，一个盲目的轮询会导致即便当前状态没有发生变化 Controller 也在不停运行，而不像由事件触发的处理程序那样精准地只在变化发生时运行。另外，Level Driven 的系统对于突发边缘的响应速度（最大延迟）取决于轮询的频率，而增大轮询的频率又会增大系统稳定时轮询的资源浪费。为此，<b>Kubernetes Controller 使用一些边缘触发的事件来触发只基于当前状态的控制流程，从而使整个控制流程具有 Level Driven 的可靠性和 Edge Driven 的快速响应</b>。我们通常称 Controller 是 Level Driven 的，其实这只是对它行为特征的描述，并非对实现原理的描述。
+上图选自 [*Programming Kubernetes by Michael Hausenblas, Stefan Schimanski*](https://learning.oreilly.com/library/view/programming-kubernetes/9781492047094/) ，形象地描述了 Controller 这种 Level Driven 的思想。实际上水平触发虽然不依赖历史状态，但总是显得不如边缘触发那样有效率，因为我们一般必须使用轮询的方法以不断检测边缘，正如图中的 “get-compare-update” 过程，一个盲目的轮询会导致即便当前状态没有发生变化 Controller 也在不停运行，而不像由事件触发的处理程序那样精准地只在变化发生时运行。另外，Level Driven 的系统对于突发边缘的响应速度（最大延迟）取决于轮询的频率，而增大轮询的频率又会增大系统稳定时轮询的资源浪费。为此，<b>Kubernetes Controller 使用一些边缘触发的事件来触发只基于当前状态的控制流程，从而使整个控制流程具有 Level Driven 的可靠性和 Edge Driven 的快速响应</b>。我们通常称 Controller 是 Level Driven 的，其实这只是对它行为特征的描述，并非对实现原理的描述。
 
 > If an API object appears with a marker value of true, you can't count on having seen it turn from false to true, only that you now observe it being true. Even an API watch suffers from this problem, so be sure that you're not counting on seeing a change unless your controller is also marking the information it last made the decision on in the object's status.
 
@@ -76,12 +76,12 @@ for {
 - Work Queue 中 Item 的意义在于触发 Worker 执行一个 Control Loop 以检查对应 Object 的最新状态，所以实际上同一 Object Key 在 Queue 中存在多个副本并无意义，某个 Object Key 是否需要被处理以及需要被处理的紧急程度（在队列中的排位）才有意义；
 - Work Queue 需要保证同一个 Item 不会被多个 Worker 并行处理，多个 Control Loop 同时调整同一个 Object 会导致问题。
 
-因此，Work Queue 将其中的 Item 分为三种状态：等待处理中、正处理中且无新请求、正在处理中且有新请求（Dirty）。当某个 Item 被试图添加到队列，若它本身不在队列中则将它直接添加到队列中，否则 Queue 会先检查它为哪一种 Item ：若为等待处理中，则队列中已存在副本，忽略本次入队请求；若为“处理中且无新请求”，则该 Object 正被处理，但本次处理不一定会兼顾最新发生的状态变化，因此将其状态标记为“正在处理中且有新请求”；若为“正在处理中且有新请求”，则忽略本次入队请求；当每个处理过程（即 Control Loop）结束后，Queue 会检查被处理的 Object 是否有新请求，若有则将这个 Object 重新加入队列并将其改为无新请求。
+因此，Work Queue 将其中的 Item 分为三种状态：等待处理中、正处理中且无新请求、正在处理中且有新请求（Dirty）。当某个 Item 被试图添加到队列，若它本身不在队列中则将它直接添加到队列中，否则 Queue 会先检查它为哪一种 Item ：若为等待处理中，则队列中已存在副本，忽略本次入队请求；若为 “处理中且无新请求” ，则该 Object 正被处理，但本次处理不一定会兼顾最新发生的状态变化，因此将其状态标记为“正在处理中且有新请求”；若为 “正在处理中且有新请求” ，则忽略本次入队请求；当每个处理过程（即 Control Loop）结束后，Queue 会检查被处理的 Object 是否有新请求，若有则将这个 Object 重新加入队列并将其改为无新请求。
 
 <div class="mxgraph" style="max-width:100%;border:1px solid transparent;" data-mxgraph="{&quot;highlight&quot;:&quot;#0000ff&quot;,&quot;lightbox&quot;:false,&quot;nav&quot;:true,&quot;resize&quot;:true,&quot;toolbar&quot;:&quot;zoom&quot;,&quot;edit&quot;:&quot;_blank&quot;,&quot;xml&quot;:&quot;&lt;mxfile host=\&quot;app.diagrams.net\&quot; modified=\&quot;2020-10-05T08:13:16.365Z\&quot; agent=\&quot;5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36 Edg/85.0.564.68\&quot; etag=\&quot;TFWq5-f3_jAEZBapnYFW\&quot; version=\&quot;13.7.7\&quot; type=\&quot;device\&quot;&gt;&lt;diagram id=\&quot;PWjo5SgMpzYFB_Sw65JJ\&quot; name=\&quot;Page-1\&quot;&gt;7Ztdc6I8FMc/jZd9hhBeL1fr7l7sztOZzmz7XEaIQBeJE2PV59NvkCBCiNIqLzrbm5JDEsjv5Jwk/9IRnCy23yhahj+Jj+ORrvnbEXwc6TrQNJ3/Si27zGIDMzMENPJFpcLwHP2P85bCuo58vCpVZITELFqWjR5JEuyxkg1RSjblanMSl5+6RAGWDM8eimXrS+SzMLM6ul3Yv+MoCPMnA8vN7ixQXlmMZBUin2yOTHA6ghNKCMuuFtsJjlN4OZes3VfF3cOLUZywJg22T9PX0Hsf/3p6eJu8fPemLvvxYIhxvKN4LUYs3pbtcgQBJeulqIYpw9s68GiWV9fkFwOH4fJ5gskCM7rjVfKOoGiyOQJsCVt4DNcURiScGhz6KsbNL8TQP4AB6F1gOOEBGY6IF0NmYzk1bOzW0MDzaDiZxMdpL9oIjjdhxPDzEnnp3Q1PC9wWsgV/6iPgl0qEZ1FlXpJR9cfGkNj8O3vj0wBchmgexfGExITu20IfYWfucfuKUfIbH92xPAfP5q1AFd248vxzO0VsKhBfOAuriE3s+EYdYkefQctqEzFw+mbsKBibV2WMAads1zF2LRuidhj3xtSVmL4Q+htTbrswO3wekmqtEd3YpjwRAeiSWr5q1lHrbdlpSk2s2DXR3DFEeX5hn29qRZFQFpKAJCieFtZxmWVR5wchS0HwDTO2Ezt0tGakzBdvI/Z6dP1f2tU/uimKj1vR9b6wywsJH/DrcSFrZubFotm+lLfLBpiO6jOu5GjImnq4wa6HIRrgk3nHrZ8cFMeIRe/l97u+q+Wg6M3V9r27+ujU1oOrDdVGiO9BrZi/93jGs6QVpFdPlHh4tYqSQL73GFG2u+q6Pnc87NVuT2eOaZiFE9tIvlbPeyfDUrgFnnbLNfnPsVXP37fdmdYNf/Xi16k7XHkDIbHuTM8QTEDNHO1Y37Dl5NEClhMeGa6+YcsBfFl0fj7WMi8NSN9wZHXw5vQNFdShHL4d+aB4c4fvM4z71pAc1RptXHcdbnMf9PE02i3iEwf33uQOFbPByB0OUFPrbRVqSm0ococzoDPwwOSOPAWcPQPnm6CzZ2Cn1zOwA4fj6oHJHS24WnHK6cjVKrnjTs7V57Ls0M7V8l+Bb+7PcE2R98ZY3g3I6S7xv6RftfCSFyM+5726Zf9k+lCE9dGozZpR57bG0S+e8EQi/uADZFMvz2ugV2hm+Uu0KoCe78itdJTlN6mjvWcOw77AWboiILiNHyu0r1ESrUIeBlUP8mnLyj4rz/WEJOmqheIoSFIvc7/x/SAcpzM+8lD8RdxYRL6/X9/qIqwcg1JeS3+ahtJprcuwK26oOYgArWY+Vf1+vSiSv8mQfNC1Agh1mUrHCqDbowJo1MMaigLoDkcBdIemALp38GmICupA1ClXJQDekjr14RDv9mOcfAUaljylgDYYeQpog9SnGmIbij4FalD9FajKm7WzqoXbVLUQod6XbAG0vxJVl87uVaMC2h18nHwunfatigCtwfb8CrLIh+B0I5ZAt7yUPRgVyE3FkmpHsNJPy1oJ0FTfEXAbvCex5DMRBo2Kl2vEgm4lFKCpTn039N1H07zWusDOi8U/+WUhVfyrJJz+AQ==&lt;/diagram&gt;&lt;/mxfile&gt;&quot;}"></div>
 <script type="text/javascript" src="https://viewer.diagrams.net/js/viewer-static.min.js"></script>
 
-> 所谓“正在处理中且有新请求”，意思是同一个 Key 需要被重新入队，但需要被延迟到本次处理完成，这也就保证 Control Loop 可再处理它一次来处理最新的状态变化，而之所以需要将入队延迟到本次处理完成，是为了防止同一 Item 被多个 Worker 并行处理。
+> 所谓 “正在处理中且有新请求” ，意思是同一个 Key 需要被重新入队，但需要被延迟到本次处理完成，这也就保证 Control Loop 可再处理它一次来处理最新的状态变化，而之所以需要将入队延迟到本次处理完成，是为了防止同一 Item 被多个 Worker 并行处理。
 
 至此，Controller 的一般结构基本解释清楚。在 Informer 、Work Queue 等模块组成的这一整体架构的支持下，某个特定功能的 Controller 只要明确这几个问题：
 
@@ -98,7 +98,7 @@ RepicaSet 是通过一组字段来定义的，包括一个用来识别其所管�
 
 - `replicas`：用户期望的副本数，默认为 1 。如果将全体被当前 ReplicaSet 所管理的 Pod 看作一个集合，Replicas 字段规定了集合的大小。ReplicaSet Controller 需要对这个集合的任何数量变化作出相应，以使其大小等于用户设定的 Replicas 。
 - `minReadySeconds`：规定新创建的 Pod 在无容器发生错误的条件下，最少准备多少秒后才可被认为 Available ，默认为 0 。
-- `selector`：即 Label Selector ，通过设定此字段规定具有怎样 Label 的 Pod 受到此 ReplicaSet 管理，即 Selector 字段定义了上文提到的“集合”。
+- `selector`：即 Label Selector ，通过设定此字段规定具有怎样 Label 的 Pod 受到此 ReplicaSet 管理，即 Selector 字段定义了上文提到的 “集合” 。
 - `template`：即 Pod Template ，定义了当集合中 Pod 数量不足时，ReplicaSet 创建 Pod 应当使用的对象模板。
 
 ### ReplicaSet Status
@@ -110,7 +110,7 @@ RepicaSet 是通过一组字段来定义的，包括一个用来识别其所管�
 - `observedGeneration`：
 - `conditions`：
 
-这里需要注意“被管理”、“处于 Ready 状态”以及“被认为 Available”这几种表达方式之间的关系和细微不同，下面这张图片是一个很好的例子：
+这里需要注意 “被管理” 、“处于 Ready 状态” 以及 “被认为 Available” 这几种表达方式之间的关系和细微不同，下面这张图片是一个很好的例子：
 
 NO IMAGE
 
@@ -184,7 +184,11 @@ rsc.podLister = podInformer.Lister()
 rsc.podListerSynced = podInformer.Informer().HasSynced
 ```
 
-#### ReplicaSet Event Handlers
+#### Event Handlers
+
+Event Handler 是将 Edge Driven 转化为 Level Driven 的关键，也是触发 Worker 中的 Control Loop 完成 “Check this X” 的关键。这些 Control Loop 何时针对哪个 ReplicaSet 实例执行，取决于 Event Handler 何时将哪个 ReplicaSet 的 Key 放入工作队列，通过这种方式 Event Handler 将某个 Worker “唤醒” 开始针对目标 ReplicaSet 进行控制，也可理解为 Event Handler 将被放入队列的 ReplicaSet “唤醒” 以进行其控制工作。
+
+##### Add ReplicaSet
 
 [`addRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L284) 在有 ReplicaSet 被创建（Informer 发现从前未出现过的 ReplicaSet）时被调用。它仅仅输出了日志并将被创建的 ReplicaSet 的 Key 直接加入队列，因为新出现的 ReplicaSet 显然有可能处于非期望状态。
 
@@ -195,6 +199,8 @@ func (rsc *ReplicaSetController) addRS(obj interface{}) {
 	rsc.enqueueRS(rs)
 }
 ```
+
+##### Update ReplicaSet
 
 修改 ReplicaSet 的许多字段都会导致这个对象变得需要被处理，如改变 Label Selector 使其管理不同的 Pod 集合、改变 Replicas 使其现有的 Pod 数量不再满足期望等。 [`updateRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L291) 可能在几种情况下被调用：
 
@@ -227,7 +233,7 @@ func (rsc *ReplicaSetController) updateRS(old, cur interface{}) {
 	}
 ```
 
-直接将新的 ReplicaSet 的 Key 进队，这里“新的”Key 的说法其实只适用于第三种情况，其他情况 Key 应当是不变的。情况一和情况二中 ReplicaSet 都会被直接进队，这里的注释也就是在解释为什么没有过滤掉情况二那些实际上没发生改变但是被触发的 ReplicaSet ，大意就是每隔一段时间就让所有 ReplicaSet 进队一次是更安全的选择，可以防止由于创建或删除 Pod 失败导致对应的 ReplicaSet 的 Update 永远不会被任何事触发（ReplicaSet 创建或删除 Pod 的过程不是阻塞的，稍后我们会提到），且有许多机制例如 Expectations 可以降低这种大量入队处理的开销。
+直接将新的 ReplicaSet 的 Key 进队，这里 “新的” Key 的说法其实只适用于第三种情况，其他情况 Key 应当是不变的。情况一和情况二中 ReplicaSet 都会被直接进队，这里的注释也就是在解释为什么没有过滤掉情况二那些实际上没发生改变但是被触发的 ReplicaSet ，大意就是每隔一段时间就让所有 ReplicaSet 进队一次是更安全的选择，可以防止由于创建或删除 Pod 失败导致对应的 ReplicaSet 的 Update 永远不会被任何事触发（ReplicaSet 创建或删除 Pod 的过程不是阻塞的，稍后我们会提到），且有许多机制例如 Expectations 可以降低这种大量入队处理的开销。
 
 ```go
 	// You might imagine that we only really need to enqueue the
@@ -249,7 +255,9 @@ func (rsc *ReplicaSetController) updateRS(old, cur interface{}) {
 }
 ```
 
-[`deleteRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L326) 的触发有两种情况，即 API Server 告知 Informer 有 Object 被删除或 Informer 自行产生的 `DeletedFinalStateUnknown` 。这里只是简单的对参数的类型进行了判断，如果传入的 `obj` 是一个 `DeletedFinalStateUnknown` 那么从中取出真正的 ReplicaSet 进行后面的处理。实际上处理也仅仅是将对应的 ReplicaSet Key 入队。
+##### Delete ReplicaSet
+
+[`deleteRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L326) 的触发有两种情况，即 API Server 告知 Informer 有 Object 被删除或 Informer 自行产生的 `DeletedFinalStateUnknown` 。这里只是简单的对参数的类型进行了判断，如果传入的 `obj` 是一个 `DeletedFinalStateUnknown` 那么从中取出真正的 ReplicaSet 进行后面的处理。实际上处理也仅仅是将对应的 ReplicaSet 唤醒。
 
 ```go
 func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
@@ -284,7 +292,7 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 
 值得注意的是这里第一次出现了 Expectations 的概念，我们暂时忽略这些对于 Expectations 的调用，在 Control Loop 中再来讨论它的作用。
 
-#### Pod Event Handlers
+##### Add Pod
 
 对于 Pod 的创建、删除和修改可能带来什么？当一个 Pod 被创建或删除，如果它属于某一个 ReplicaSet 的管辖，那么该 ReplicaSet 就会因为 Pod 数量发生改变而偏离期望状态。当某个 Pod 自身被修改，它可能会由于 Label 的改变而离开原本的 ReplicaSet 而被新的 ReplicaSet 管理，也可能会因为状态的变更（原本 Active 的 Pod 不再 Active 等）而导致它所在的 ReplicaSet 偏离期望状态。
 
@@ -292,9 +300,9 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 
 1. 要么 Pod 被 Controller 中的某个 Worker 创建成功，那么该 Pod 应该原本具有一个指向某 ReplicaSet 的 Owner Reference 。（在 Kubernetes 源码中许多表示 Owner Reference 的函数和变量被命名为 Controller Reference ，但这种名称容易与 Controller 混淆而造成迷惑，所以统一称为 Owner Reference）
 1. 要么 Pod 被第三方（用户或其他 Controller）创建，那么该 Pod 可能没有 Owner ，也可能属于某个 ReplicaSet 或属于某个其他类型的 Object 。
-1. 要么 Pod 并非刚刚被创建，只是刚刚被 Informer“发现”，这可能由于许多原因，例如 Controller 刚刚被启动或若干事件被 Watch 错失。此时 Pod 可能处于生命周期的任何阶段。
+1. 要么 Pod 并非刚刚被创建，只是刚刚被 Informer “发现” ，这可能由于许多原因，例如 Controller 刚刚被启动或若干事件被 Watch 错失。此时 Pod 可能处于生命周期的任何阶段。
 
-对于已经被设置 Owner Reference 的 Pod ，除了其 Owner 本身外其他 ReplicaSet 即便拥有匹配的 Label Selector 也不会将其纳入管理，直到 Pod 被 Owner 释放即 Owner Reference 被清除后其他 ReplicaSet 才应当考虑接受并开始管理该 Pod 。因此对于这些 Pod ，`addPod` 仅将它们 Owner Reference 记录的 ReplicaSet（如果它的 Owner 并非 ReplicaSet ，则直接退出）的 Key 入队，如果该 Pod 不再匹配原有 Owner 的 Label Selector ，那么它自然会被 Control Loop 释放。
+对于已经被设置 Owner Reference 的 Pod ，除了其 Owner 本身外其他 ReplicaSet 即便拥有匹配的 Label Selector 也不会将其纳入管理，直到 Pod 被 Owner 释放即 Owner Reference 被清除后其他 ReplicaSet 才应当考虑接受并开始管理该 Pod 。因此对于这些 Pod ，`addPod` 仅将它们 Owner Reference 记录的 ReplicaSet（如果它的 Owner 并非 ReplicaSet ，则直接退出）唤醒，如果该 Pod 不再匹配原有 Owner 的 Label Selector ，那么它自然会被 Control Loop 释放。
 
 ```golang
 	// If it has a ControllerRef, that's all that matters.
@@ -314,7 +322,7 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 	}
 ```
 
-对于没有 Owner 的 Pod ，`addPod` 会将同一命名空间中，所有 ReplicaSet 中具备与当前 Pod 匹配的 Label Selector 的 ReplicaSet 的 Key 全部放入队列中。具体由哪个 ReplicaSet 接收实际上是随机的，取决于哪个 ReplicaSet 的 Key 会先被 Worker 取出。ReplicaSet 只可能管理同一命名空间中的 Pod 这一规则在这里得以体现。
+对于没有 Owner 的 Pod ，`addPod` 会将同一命名空间中，所有 ReplicaSet 中具备与当前 Pod 匹配的 Label Selector 的 ReplicaSet 全部唤醒。道理上看它们都应当管理该 Pod ，但每个 Pod 不能由多个 ReplicaSet 同时管理，具体由哪个 ReplicaSet 接收实际上是随机的，取决于哪个 ReplicaSet 的 Key 会先被 Worker 取出并抢先设置 Owner Reference 。另外，ReplicaSet 只可能管理同一命名空间中的 Pod 这一规则在这里得以体现。
 
 ```golang
 	// Otherwise, it's an orphan. Get a list of all matching ReplicaSets and sync
@@ -331,4 +339,76 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 	}
 ```
 
-`updatePod` 的核心问题在于如何处理 Label 和 Owner Reference 的“组合变更”，而 `deletePod` 则是直接将被删除的 Pod 的 Owner 入队，考虑到 Event Handler 的大部分细节已在前面阐述，这里就不占用篇幅了。对于 Pod Event Handler ，只需注意 Pod 若已拥有 Owner ，必须先将此 Owner“唤醒”，结合其详细的注释就比较好理解了。
+##### Update Pod
+
+[`updatePod`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L403) 的核心问题在于如何处理 Label 和 Owner Reference 的 “组合变更” ，这两个字段都允许被外部更改，因此必须对这种复杂的情况加以分析。不过在此之前，它首先过滤掉了 Periodical Resync 产生的大量事件，通过判断 `ResourceVersion` 可以做到这一点，具体原因可参考 [Efficient detection of changes](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes) 。
+
+```golang
+func (rsc *ReplicaSetController) updatePod(old, cur interface{}) {
+	curPod := cur.(*v1.Pod)
+	oldPod := old.(*v1.Pod)
+	if curPod.ResourceVersion == oldPod.ResourceVersion {
+		// Periodic resync will send update events for all known pods.
+		// Two different versions of the same pod will always have different RVs.
+		return
+	}
+```
+
+> ReplicaSet 的 Update Event Handler 没有过滤掉这些事件换取了更可靠的 Controller ，而 Pod 无需这样做，因为 Update Pod 的最终目的也是将 ReplicaSet 入队以表达 “Check this X” 之意，无需定期触发 Update Pod ，因为 Update ReplicaSet 也能起到相同的作用。
+
+对于 Label 和 Owner Reference 的处理思路是这样的：如果 Owner Reference 变化了，这可能表明 Pod 被从它旧的属主那里主动地释放或被动地剥夺了，我们无法区分这两种情况，必须唤醒旧的属主（假如有）以告知它这一事件。类似地，如果 Pod 被指定了一个新的属主，我们同样需要唤醒新属主，并且在这种情况下，Label 的不需要再被考虑，因为已有属主的 Pod 不会被其他 ReplicaSet 管理。
+
+```golang
+	curControllerRef := metav1.GetControllerOf(curPod)
+	oldControllerRef := metav1.GetControllerOf(oldPod)
+	controllerRefChanged := !reflect.DeepEqual(curControllerRef, oldControllerRef)
+	if controllerRefChanged && oldControllerRef != nil {
+		// The ControllerRef was changed. Sync the old controller, if any.
+		if rs := rsc.resolveControllerRef(oldPod.Namespace, oldControllerRef); rs != nil {
+			rsc.enqueueRS(rs)
+		}
+	}
+
+	// If it has a ControllerRef, that's all that matters.
+	if curControllerRef != nil {
+		rs := rsc.resolveControllerRef(curPod.Namespace, curControllerRef)
+		if rs == nil {
+			return
+		}
+		klog.V(4).Infof("Pod %s updated, objectMeta %+v -> %+v.", curPod.Name, oldPod.ObjectMeta, curPod.ObjectMeta)
+		rsc.enqueueRS(rs)
+		// TODO: MinReadySeconds in the Pod will generate an Available condition to be added in
+		// the Pod status which in turn will trigger a requeue of the owning replica set thus
+		// having its status updated with the newly available replica. For now, we can fake the
+		// update by resyncing the controller MinReadySeconds after the it is requeued because
+		// a Pod transitioned to Ready.
+		// Note that this still suffers from #29229, we are just moving the problem one level
+		// "closer" to kubelet (from the deployment to the replica set controller).
+		if !podutil.IsPodReady(oldPod) && podutil.IsPodReady(curPod) && rs.Spec.MinReadySeconds > 0 {
+			klog.V(2).Infof("%v %q will be enqueued after %ds for availability check", rsc.Kind, rs.Name, rs.Spec.MinReadySeconds)
+			// Add a second to avoid milliseconds skew in AddAfter.
+			// See https://github.com/kubernetes/kubernetes/issues/39785#issuecomment-279959133 for more info.
+			rsc.enqueueRSAfter(rs, (time.Duration(rs.Spec.MinReadySeconds)*time.Second)+time.Second)
+		}
+		return
+	}
+```
+
+若 Pod 没有被指定属主，我们需要考虑 Label 的变化，即像 `addPod` 中所作的一样唤醒所有可能作为属主的 ReplicaSet 。
+
+```golang
+	// Otherwise, it's an orphan. If anything changed, sync matching controllers
+	// to see if anyone wants to adopt it now.
+	if labelChanged || controllerRefChanged {
+		rss := rsc.getPodReplicaSets(curPod)
+		if len(rss) == 0 {
+			return
+		}
+		klog.V(4).Infof("Orphan Pod %s updated, objectMeta %+v -> %+v.", curPod.Name, oldPod.ObjectMeta, curPod.ObjectMeta)
+		for _, rs := range rss {
+			rsc.enqueueRS(rs)
+		}
+	}
+```
+
+[`deletePod`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L477) 的工作则是直接唤醒被删除的 Pod 的属主。考虑到 Event Handler 的大部分细节已在前面阐述，这里就不占用篇幅了。对于 Pod Event Handler ，只需注意 Pod 若已拥有 Owner ，必须先将此 Owner 唤醒，结合其详细的注释就比较好理解了。
