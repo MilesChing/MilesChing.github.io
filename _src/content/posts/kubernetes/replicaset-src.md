@@ -553,3 +553,95 @@ if err != nil {
 ##### 保证 Pod 集合的大小
 
 其次，ReplicaSet 总会创建或删除 Pod 保证被管理的 Pod 总数等于 Replicas（尽管创建或删除之前或过程中 Pod 数量可能暂时地不满足期望，我们都知道不可能做到 Pod 数量恒定于期望值）；<b>此时，一个 ReplicaSet 当前状态与期望状态之间的差异体现在被它管理的 Pod 数量与 Replicas 之间的差异。</b>
+
+```go
+var manageReplicasErr error
+if rsNeedsSync && rs.DeletionTimestamp == nil {
+	manageReplicasErr = rsc.manageReplicas(filteredPods, rs)
+}
+```
+
+[`manageReplicas`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L545) 用于处理这种差异。但在此之前，注意到 `rsNeedsSync` 控制了是否调用 `manageReplicas` ，这是一个与 Expectations 模块有关的标志，在此我们仅知道它控制了是否对 Pod 数量进行调整，在后文中介绍 Expectations 时再加以解释。
+
+`manageReplicas` 对 Pod 数量与期望之间的偏差进行计算：
+
+```go
+	diff := len(filteredPods) - int(*(rs.Spec.Replicas))
+```
+
+当 `diff` 为负数时代表被管理的 Pod 数量不足，需要创建新 Pod 。首先，单次 Control Loop 中创建和删除 Pod 的真实数量都需要由参数 `burstReplicas` 限制，该参数为 Controller 的启动参数，是初始化 Controller 时传入的。
+
+```go
+if diff < 0 {
+	diff *= -1
+	if diff > rsc.burstReplicas {
+		diff = rsc.burstReplicas
+	}
+```
+
+接着，Controller 使用一种称作批量启动（Batch Start）的方法创建一定数量的 Pod 。批量启动根据 Pod Template 并行创建大量相同的 Pod ，它将需要被创建的 Pod 数量分为若干个 Batch ，这些 Batch 中包含的 Pod 数量由小到大各不相同，由 `SlowStartInitialBatchSize` 控制最小的 Batch 的大小，而后 Batch 大小逐个倍增。在创建 Pod 时，Controller 按照由小到大的顺序串行创建每个 Batch ，而单个 Batch 之内是并行创建的。Batch Start 本质上是先使用小的 Batch 尝试创建 Pod 这一行为是否会出错，当某个 Batch 创建出错时，Controller 会取消后面更大 Batch 的创建，这样做的好处即避免了大量并行创建 Pod 的请求同时出错，而导致大量请求夹杂着错误信息淹没 API Server 。
+
+```go
+// Batch the pod creates. Batch sizes start at SlowStartInitialBatchSize
+// and double with each successful iteration in a kind of "slow start".
+// This handles attempts to start large numbers of pods that would
+// likely all fail with the same error. For example a project with a
+// low quota that attempts to create a large number of pods will be
+// prevented from spamming the API service with the pod create requests
+// after one of its pods fails.  Conveniently, this also prevents the
+// event spam that those failures would generate.
+successfulCreations, err := slowStartBatch(diff, controller.SlowStartInitialBatchSize, func() error {
+	err := rsc.podControl.CreatePodsWithControllerRef(rs.Namespace, &rs.Spec.Template, rs, metav1.NewControllerRef(rs, rsc.GroupVersionKind))
+	if err != nil {
+		if errors.HasStatusCause(err, v1.NamespaceTerminatingCause) {
+			// if the namespace is being terminated, we don't have to do
+			// anything because any creation will fail
+			return nil
+		}
+	}
+	return err
+})
+```
+
+对于 `diff` 为正的情况，Controller 需要在现有被管理 Pod 中删除一些，这个行为同样需要受到 `burstReplicas` 的限制。
+
+```go
+} else if diff > 0 {
+	if diff > rsc.burstReplicas {
+		diff = rsc.burstReplicas
+	}
+```
+
+通过 [`getPodsToDelete`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L804) 方法，Controller 得以从被管理 Pod 中选出一些以在删除时造成较小的 “损失” 。
+
+```go
+relatedPods, err := rsc.getIndirectlyRelatedPods(rs)
+utilruntime.HandleError(err)
+
+// Choose which Pods to delete, preferring those in earlier phases of startup.
+podsToDelete := getPodsToDelete(filteredPods, relatedPods, diff)
+```
+
+通过阅读其中更深的代码，可以发现 `getPodsToDelete` 是通过对 [`ActivePodsWithRanks`](https://github.com/kubernetes/kubernetes/blob/94833ccdf29146c4908ed1b891a87f2510684ed1/pkg/controller/controller_utils.go#L815) 进行排序，并取排序靠前的 Pod 。排序的比较关系为此处的 [`Less`](https://github.com/kubernetes/kubernetes/blob/94833ccdf29146c4908ed1b891a87f2510684ed1/pkg/controller/controller_utils.go#L836) 方法。
+
+而后，通过开启多个 Go Routine 并行删除选定的 Pod 。
+
+```go
+var wg sync.WaitGroup
+wg.Add(diff)
+for _, pod := range podsToDelete {
+	go func(targetPod *v1.Pod) {
+		defer wg.Done()
+		if err := rsc.podControl.DeletePod(rs.Namespace, targetPod.Name, rs); err != nil {
+			// Decrement the expected number of deletes because the informer won't observe this deletion
+			podKey := controller.PodKey(targetPod)
+			rsc.expectations.DeletionObserved(rsKey, podKey)
+			if !apierrors.IsNotFound(err) {
+				klog.V(2).Infof("Failed to delete %v, decremented expectations for %v %s/%s", podKey, rsc.Kind, rs.Namespace, rs.Name)
+				errCh <- err
+			}
+		}
+	}(pod)
+}
+wg.Wait()
+```
