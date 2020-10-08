@@ -13,7 +13,7 @@
 <script type="text/javascript" src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
 </script>
 
-<link href="https://MilesChing.github.io/css/stylesheet.min.eb19621bb2e2911592423a71ebcc7d2b003e6f0e3861321dca4882edf9059c4e.css" integrity="sha256-6xliG7LikRWSQjpx68x9KwA&#43;bw44YTIdykiC7fkFnE4=" rel="preload stylesheet"
+<link href="https://MilesChing.github.io/css/stylesheet.min.b586bb73b58454ff4b718aeeac706dc5905a304180a33507fa016cb1ce2c87f3.css" integrity="sha256-tYa7c7WEVP9LcYrurHBtxZBaMEGAozUH&#43;gFssc4sh/M=" rel="preload stylesheet"
     as="style">
 
 <link rel="apple-touch-icon" href="https://MilesChing.github.io/apple-touch-icon.png">
@@ -85,35 +85,35 @@
 <h3 id="从路径和uri获取实例">从路径和<code>Uri</code>获取实例</h3>
 <p>涉及文件和文件夹操作时，我们最熟悉不过的就是<code>StorageFile</code>和<code>StorageFolder</code>，它们的实例与某一文件或文件夹相对应，许多与文件信息提取和文件操作有关的方法都直接依赖于这两个类的实例。</p>
 <p>你可以从地址或<code>Uri</code>实例取得<code>StorageFile</code>实例：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"><span style="color:#66d9ef">string</span> path = <span style="color:#e6db74">&#34;your path&#34;</span>;
-StorageFile file = <span style="color:#66d9ef">await</span> StorageFile.GetFileFromPathAsync(path);
-file = <span style="color:#66d9ef">await</span> StorageFile.GetFileFromApplicationUriAsync(<span style="color:#66d9ef">new</span> Uri(path));
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"><span style="color:#8be9fd">string</span> path = <span style="color:#f1fa8c">&#34;your path&#34;</span>;
+StorageFile file = <span style="color:#ff79c6">await</span> StorageFile.GetFileFromPathAsync(path);
+file = <span style="color:#ff79c6">await</span> StorageFile.GetFileFromApplicationUriAsync(<span style="color:#ff79c6">new</span> Uri(path));
 </code></pre></div><p>这里使用<code>Uri</code>的区别在于后者可以利用协议（<code>Uri</code>前缀）访问一些特殊位置，这里引用另一篇博客的内容作为说明，更多使用方法可参考<a href="https://docs.microsoft.com/en-us/previous-versions/windows/apps/hh965322(v=win.10)">微软官方的文档</a>，</p>
 <blockquote>
 <p>应用在安装了之后，会自动生成三个文件夹存放应用的数据，分别是Local文件夹（用来存放本地数据）、Roaming文件夹（用来存放漫游数据）和Temp文件夹（用来寻访临时数据）。在程序中访问这三个文件夹中的文件，需要使用的 <code>Uri</code>的前缀应该是<code>ms-appdate://</code>，后面加上路径，比如<code>/local/a.mp3</code>，需要注意的是路径最前面的<code>/</code>代表了路径是从根目录开始的绝对路径，因此完整的URI定义应该是<code>new Uri(&quot;ms-appdata:///local/a.mp3&quot;)</code>；</p>
 <p>如果需要访问应用程序包中的资源，也就是在开发中显示在解决资源管理器中的资源，比如<code>Assets</code>中的资源，需要使用的前缀是<code>ms-appx://</code>，后面的路径与上一段讲的一样，比如访问<code>Assets</code>中的一个<code>mp3</code>文件使用的URI就是<code>ms-appx:///Assets/a.mp3</code>。</p>
 </blockquote>
 <p>同样地使用异步方法获取<code>StorageFolder</code>实例：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">StorageFolder folder = <span style="color:#66d9ef">await</span> StorageFolder.GetFolderFromPathAsync(path);
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">StorageFolder folder = <span style="color:#ff79c6">await</span> StorageFolder.GetFolderFromPathAsync(path);
 </code></pre></div><p>另外，借助<code>StorageFolder</code>实例，你也可以获取文件夹中的子文件和子文件夹：</p>
 <p><img src="../images/%E6%96%87%E4%BB%B6%E5%92%8C%E6%96%87%E4%BB%B6%E5%A4%B9%E6%9D%83%E9%99%90_%E5%AD%90%E6%96%87%E4%BB%B6%E5%92%8C%E5%AD%90%E6%96%87%E4%BB%B6%E5%A4%B9.png" alt="子文件和子文件夹"></p>
 <p>还有众多移动、复制、删除、在根目录下创建新子文件和新子文件夹等等操作，以及使用<code>FileIO</code>类结合<code>StorageFile</code>实例进行文件读写的操作，都非常基本。这里不做详细介绍。</p>
 <h3 id="用户选择的文件和文件夹">用户选择的文件和文件夹</h3>
 <p>使用<code>Windows.Storage.Pickers.FolderPicker</code>可以管理一个文件夹选取器，该选取器可以弹出一个我们常见到的选取文件夹窗口供用户选择，用户选择后异步函数将直接返回一个<code>StorageFolder</code>实例。感谢C#的异步机制这个过程的实现相当优雅：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">FolderPicker picker = <span style="color:#66d9ef">new</span> FolderPicker();
-picker.FileTypeFilter.Add(<span style="color:#e6db74">&#34;.&#34;</span>); <span style="color:#75715e">//虽然是选取文件夹，FileTypeFilter也不能为空，这里随意添加一项
-</span><span style="color:#75715e"></span>StorageFolder folder = <span style="color:#66d9ef">await</span> picker.PickSingleFolderAsync();
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">FolderPicker picker = <span style="color:#ff79c6">new</span> FolderPicker();
+picker.FileTypeFilter.Add(<span style="color:#f1fa8c">&#34;.&#34;</span>); <span style="color:#6272a4">//虽然是选取文件夹，FileTypeFilter也不能为空，这里随意添加一项
+</span><span style="color:#6272a4"></span>StorageFolder folder = <span style="color:#ff79c6">await</span> picker.PickSingleFolderAsync();
 </code></pre></div><p>我们经常看到的文件夹选取窗口就来自这几行代码：</p>
 <p><img src="../images/%E6%96%87%E4%BB%B6%E5%92%8C%E6%96%87%E4%BB%B6%E5%A4%B9%E6%9D%83%E9%99%90_%E6%96%87%E4%BB%B6%E5%A4%B9%E9%80%89%E5%8F%96%E5%99%A8.png" alt="文件夹选取窗口"></p>
 <p>类似地，你可以用<code>FileOpenPicker</code>选取文件：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">FileOpenPicker picker = <span style="color:#66d9ef">new</span> FileOpenPicker();
-picker.FileTypeFilter.Add(<span style="color:#e6db74">&#34;.txt&#34;</span>);
-StorageFile file = <span style="color:#66d9ef">await</span> picker.PickSingleFileAsync();
-IReadOnlyList&lt;StorageFile&gt; files = <span style="color:#66d9ef">await</span> picker.PickMultipleFilesAsync();
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">FileOpenPicker picker = <span style="color:#ff79c6">new</span> FileOpenPicker();
+picker.FileTypeFilter.Add(<span style="color:#f1fa8c">&#34;.txt&#34;</span>);
+StorageFile file = <span style="color:#ff79c6">await</span> picker.PickSingleFileAsync();
+IReadOnlyList&lt;StorageFile&gt; files = <span style="color:#ff79c6">await</span> picker.PickMultipleFilesAsync();
 </code></pre></div><p>或使用<code>FileSavePicker</code>选取用户选择保存到某处后创建的新文件：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">FileSavePicker picker = <span style="color:#66d9ef">new</span> FileSavePicker();
-picker.FileTypeChoices.Add(<span style="color:#e6db74">&#34;.png&#34;</span>);
-StorageFile file = <span style="color:#66d9ef">await</span> picker.PickSaveFileAsync();
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">FileSavePicker picker = <span style="color:#ff79c6">new</span> FileSavePicker();
+picker.FileTypeChoices.Add(<span style="color:#f1fa8c">&#34;.png&#34;</span>);
+StorageFile file = <span style="color:#ff79c6">await</span> picker.PickSaveFileAsync();
 </code></pre></div><h3 id="从storageitemaccesslist获取">从<code>StorageItemAccessList</code>获取</h3>
 <p>这里就要涉及到权限管理的部分了，我们在下一小节中作具体介绍。</p>
 <h2 id="管理文件和文件夹访问权限">管理文件和文件夹访问权限</h2>
@@ -133,27 +133,27 @@ StorageFile file = <span style="color:#66d9ef">await</span> picker.PickSaveFileA
 </blockquote>
 <h3 id="跟踪最近使用的文件和文件夹">跟踪最近使用的文件和文件夹</h3>
 <p>最初，在应用中持久化地（持久化地，即能存储在文件中的，转化为基本数据类型的存储方式）存储文件和文件夹的方式基本为使用路径字符串存储。实际上，<code>StorageItemAccessList</code>为我们提供了更好的选择：当你将某文件或文件夹存储在一个<code>StorageItemAccessList</code>中时，<code>Add</code>方法会返回一个<code>token</code>字符串，该字符串与每个文件或文件夹一一对应，也就是当你重复添加文件到列表时，得到的<code>token</code>一定相同。可以看出，<code>StorageItemAccessList</code>实际上并非一个列表，而是一个以键值对为基础的字典，我们对<code>StorageItemAccessList</code>中的项进行操作都依赖<code>token</code>作为索引。如下代码以<code>FutureAccessList</code>为例展示了一些对<code>StorageItemAccessList</code>实例的基本操作。</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">StorageFolder folder = <span style="color:#66d9ef">await</span> StorageFolder.GetFolderFromPathAsync(<span style="color:#e6db74">&#34;test&#34;</span>);
-StorageFile file = <span style="color:#66d9ef">await</span> StorageFile.GetFileFromPathAsync(<span style="color:#e6db74">&#34;test.t&#34;</span>);
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">StorageFolder folder = <span style="color:#ff79c6">await</span> StorageFolder.GetFolderFromPathAsync(<span style="color:#f1fa8c">&#34;test&#34;</span>);
+StorageFile file = <span style="color:#ff79c6">await</span> StorageFile.GetFileFromPathAsync(<span style="color:#f1fa8c">&#34;test.t&#34;</span>);
 
-<span style="color:#66d9ef">var</span> FAList = Windows.Storage.AccessCache.StorageApplicationPermissions.FutureAccessList;
+<span style="color:#8be9fd">var</span> FAList = Windows.Storage.AccessCache.StorageApplicationPermissions.FutureAccessList;
 
-<span style="color:#66d9ef">string</span> fileToken = FAList.Add(file);    <span style="color:#75715e">//添加文件
-</span><span style="color:#75715e"></span><span style="color:#66d9ef">string</span> folderToken = FAList.Add(folder);    <span style="color:#75715e">//添加文件夹
-</span><span style="color:#75715e"></span>
-<span style="color:#66d9ef">bool</span> access = FAList.CheckAccess(folder);   <span style="color:#75715e">//查看是否有访问权限
-</span><span style="color:#75715e"></span><span style="color:#66d9ef">bool</span> contains = FAList.ContainsItem(folderToken);   <span style="color:#75715e">//查看是否有某token
-</span><span style="color:#75715e"></span>
-file = <span style="color:#66d9ef">await</span> FAList.GetFileAsync(fileToken);    <span style="color:#75715e">//获取文件
-</span><span style="color:#75715e"></span>folder = <span style="color:#66d9ef">await</span> FAList.GetFolderAsync(folderToken);  <span style="color:#75715e">//获取文件夹
-</span><span style="color:#75715e"></span>
-FAList.Remove(fileToken); <span style="color:#75715e">//删除文件
-</span><span style="color:#75715e"></span>FAList.Remove(folderToken);   <span style="color:#75715e">//删除文件夹
+<span style="color:#8be9fd">string</span> fileToken = FAList.Add(file);    <span style="color:#6272a4">//添加文件
+</span><span style="color:#6272a4"></span><span style="color:#8be9fd">string</span> folderToken = FAList.Add(folder);    <span style="color:#6272a4">//添加文件夹
+</span><span style="color:#6272a4"></span>
+<span style="color:#8be9fd">bool</span> access = FAList.CheckAccess(folder);   <span style="color:#6272a4">//查看是否有访问权限
+</span><span style="color:#6272a4"></span><span style="color:#8be9fd">bool</span> contains = FAList.ContainsItem(folderToken);   <span style="color:#6272a4">//查看是否有某token
+</span><span style="color:#6272a4"></span>
+file = <span style="color:#ff79c6">await</span> FAList.GetFileAsync(fileToken);    <span style="color:#6272a4">//获取文件
+</span><span style="color:#6272a4"></span>folder = <span style="color:#ff79c6">await</span> FAList.GetFolderAsync(folderToken);  <span style="color:#6272a4">//获取文件夹
+</span><span style="color:#6272a4"></span>
+FAList.Remove(fileToken); <span style="color:#6272a4">//删除文件
+</span><span style="color:#6272a4"></span>FAList.Remove(folderToken);   <span style="color:#6272a4">//删除文件夹
 </span></code></pre></div><blockquote>
 <p><code>StorageItemAccessList</code>似乎在项过多时新加入的项会自动顶出最早加入的项。因此有必要注意其存储上限，并时刻注意检查权限。</p>
 </blockquote>
 <p>除此之外，若要遍历当前添加的项，可以使用<code>StorageItemAccessList.Entries</code>，它是一个<code>AccessListEntryView</code>实例：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"><span style="color:#66d9ef">public</span> <span style="color:#66d9ef">sealed</span> <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">AccessListEntryView</span> : IReadOnlyList&lt;AccessListEntry&gt;, IEnumerable&lt;AccessListEntry&gt;
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"><span style="color:#ff79c6">public</span> <span style="color:#ff79c6">sealed</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">AccessListEntryView</span> : IReadOnlyList&lt;AccessListEntry&gt;, IEnumerable&lt;AccessListEntry&gt;
 </code></pre></div><p>其中<code>AccessListEntry</code>包含了特定元数据和对应的<code>token</code>，以防万一你有遍历所有的<code>token</code>的需求。</p>
 <p>更多使用方法可以查阅<a href="https://docs.microsoft.com/en-us/uwp/api/Windows.Storage.AccessCache.StorageApplicationPermissions"><code>StorageItemAccessList</code>类的文档</a>。</p></div>
   <footer class="post-footer">

@@ -13,7 +13,7 @@
 <script type="text/javascript" src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
 </script>
 
-<link href="https://MilesChing.github.io/css/stylesheet.min.eb19621bb2e2911592423a71ebcc7d2b003e6f0e3861321dca4882edf9059c4e.css" integrity="sha256-6xliG7LikRWSQjpx68x9KwA&#43;bw44YTIdykiC7fkFnE4=" rel="preload stylesheet"
+<link href="https://MilesChing.github.io/css/stylesheet.min.b586bb73b58454ff4b718aeeac706dc5905a304180a33507fa016cb1ce2c87f3.css" integrity="sha256-tYa7c7WEVP9LcYrurHBtxZBaMEGAozUH&#43;gFssc4sh/M=" rel="preload stylesheet"
     as="style">
 
 <link rel="apple-touch-icon" href="https://MilesChing.github.io/apple-touch-icon.png">
@@ -85,10 +85,10 @@
   </div>
   <div class="post-content"><p>图像的边缘和其他尖锐跳跃（如噪声）对傅立叶变换的高频分量有很大贡献；滤波处理是通过将图像变换到频域，经过处理后再逆变换回原图像以达到某些特殊效果的方法。本节主要介绍低通滤波器法、高通滤波器法、带通和带阻滤波器法等等。</p>
 <p>本节代码使用类库：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#f92672">import</span> cv2
-<span style="color:#f92672">import</span> numpy <span style="color:#f92672">as</span> np
-<span style="color:#f92672">import</span> math
-<span style="color:#f92672">from</span> matplotlib <span style="color:#f92672">import</span> pyplot <span style="color:#66d9ef">as</span> plt
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ff79c6">import</span> cv2
+<span style="color:#ff79c6">import</span> numpy <span style="color:#ff79c6">as</span> np
+<span style="color:#ff79c6">import</span> math
+<span style="color:#ff79c6">from</span> matplotlib <span style="color:#ff79c6">import</span> pyplot <span style="color:#ff79c6">as</span> plt
 </code></pre></div><h2 id="空间域与频域的转换">空间域与频域的转换</h2>
 <p>一维离散傅里叶变换：</p>
 <p>\[
@@ -99,26 +99,26 @@ F(u)=\sum\limits_{x=0}^{N-1}f(x)e^{(-j\frac{2\pi}{N}wx)}
 F(u)=\frac{1}{N}\sum\limits_{u=0}^{N-1}F(u)e^{(j\frac{2\pi}{N}wx)}
 \]</p>
 <p>在Python中使用OpenCV进行图片的基本操作，使用<code>numpy</code>库中的函数即可完成离散二维傅里叶变换，为了便于理解我们将变换结果转为实数（模长）并用对数函数进行了可视化。</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">process</span>(img):
-    f <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>fft<span style="color:#f92672">.</span>fft2(img)    <span style="color:#75715e"># 作二维傅里叶变换</span>
-    <span style="color:#75715e"># 移位操作即将得到矩阵左上与右下、右上与左下交换</span>
-    <span style="color:#75715e"># 以将高频分量集中到矩阵中心便于滤波</span>
-    fshift <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>fft<span style="color:#f92672">.</span>fftshift(f)
-    rf <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>log(np<span style="color:#f92672">.</span>abs(fshift))
-    rf <span style="color:#f92672">=</span> rf<span style="color:#f92672">/</span>np<span style="color:#f92672">.</span>max(rf)
-    <span style="color:#66d9ef">return</span> rf
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ff79c6">def</span> <span style="color:#50fa7b">process</span>(img):
+    f <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>fft<span style="color:#ff79c6">.</span>fft2(img)    <span style="color:#6272a4"># 作二维傅里叶变换</span>
+    <span style="color:#6272a4"># 移位操作即将得到矩阵左上与右下、右上与左下交换</span>
+    <span style="color:#6272a4"># 以将高频分量集中到矩阵中心便于滤波</span>
+    fshift <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>fft<span style="color:#ff79c6">.</span>fftshift(f)
+    rf <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>log(np<span style="color:#ff79c6">.</span>abs(fshift))
+    rf <span style="color:#ff79c6">=</span> rf<span style="color:#ff79c6">/</span>np<span style="color:#ff79c6">.</span>max(rf)
+    <span style="color:#ff79c6">return</span> rf
 
-img <span style="color:#f92672">=</span> cv2<span style="color:#f92672">.</span>imread(<span style="color:#e6db74">&#39;lenna.jpg&#39;</span>,<span style="color:#ae81ff">0</span>)
-newImg <span style="color:#f92672">=</span> process(img)
+img <span style="color:#ff79c6">=</span> cv2<span style="color:#ff79c6">.</span>imread(<span style="color:#f1fa8c">&#39;lenna.jpg&#39;</span>,<span style="color:#bd93f9">0</span>)
+newImg <span style="color:#ff79c6">=</span> process(img)
 
-<span style="color:#75715e"># 以下为画图部分</span>
-plt<span style="color:#f92672">.</span>subplot(<span style="color:#ae81ff">1</span>,<span style="color:#ae81ff">2</span>,<span style="color:#ae81ff">1</span>)
-plt<span style="color:#f92672">.</span>imshow(img, cmap<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;gray&#39;</span>)
-plt<span style="color:#f92672">.</span>title(<span style="color:#e6db74">u</span><span style="color:#e6db74">&#39;原图&#39;</span>)
-plt<span style="color:#f92672">.</span>subplot(<span style="color:#ae81ff">1</span>,<span style="color:#ae81ff">2</span>,<span style="color:#ae81ff">2</span>)
-plt<span style="color:#f92672">.</span>imshow(newImg, cmap<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;gray&#39;</span>)
-plt<span style="color:#f92672">.</span>title(<span style="color:#e6db74">u</span><span style="color:#e6db74">&#39;频域图像&#39;</span>)
-plt<span style="color:#f92672">.</span>show()
+<span style="color:#6272a4"># 以下为画图部分</span>
+plt<span style="color:#ff79c6">.</span>subplot(<span style="color:#bd93f9">1</span>,<span style="color:#bd93f9">2</span>,<span style="color:#bd93f9">1</span>)
+plt<span style="color:#ff79c6">.</span>imshow(img, cmap<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;gray&#39;</span>)
+plt<span style="color:#ff79c6">.</span>title(<span style="color:#f1fa8c">u</span><span style="color:#f1fa8c">&#39;原图&#39;</span>)
+plt<span style="color:#ff79c6">.</span>subplot(<span style="color:#bd93f9">1</span>,<span style="color:#bd93f9">2</span>,<span style="color:#bd93f9">2</span>)
+plt<span style="color:#ff79c6">.</span>imshow(newImg, cmap<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;gray&#39;</span>)
+plt<span style="color:#ff79c6">.</span>title(<span style="color:#f1fa8c">u</span><span style="color:#f1fa8c">&#39;频域图像&#39;</span>)
+plt<span style="color:#ff79c6">.</span>show()
 </code></pre></div><blockquote>
 <p>注意：<code>cv2</code>使用<code>[b,g,r]</code>存储通道，而<code>matplotlib</code>会理解为<code>[r,g,b]</code>。</p>
 </blockquote>
@@ -127,24 +127,24 @@ plt<span style="color:#f92672">.</span>show()
 <p>图像中亮度比较高的区域代表变换后模长（幅值）较大的部分。</p>
 <h2 id="低通滤波器法">低通滤波器法</h2>
 <p>通过一个线性系统，频域上对一定范围高频分量进行衰减能够达到平滑化，这种线性系统称为低通滤波器法。为避免大段代码的出现，在下面的介绍中，我们将只给出构造滤波器矩阵的细节（例如<code>LPF</code>函数），而统一使用这样的代码进行滤波：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">process</span>(img, D):
-    f <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>fft<span style="color:#f92672">.</span>fft2(img)   <span style="color:#75715e"># 作二维傅里叶变换</span>
-    <span style="color:#75715e"># 移位操作即将得到矩阵左上与右下、右上与左下交换</span>
-    <span style="color:#75715e"># 将高频分量集中到矩阵中心便于滤波</span>
-    fshift <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>fft<span style="color:#f92672">.</span>fftshift(f)
-    height <span style="color:#f92672">=</span> len(fshift)
-    width <span style="color:#f92672">=</span> len(fshift[<span style="color:#ae81ff">0</span>])
-    <span style="color:#75715e"># 得到滤波器H</span>
-    H <span style="color:#f92672">=</span> HPF(width,height,D)
-    <span style="color:#75715e"># 计算变换后的像素</span>
-    fshift <span style="color:#f92672">=</span> fshift<span style="color:#f92672">*</span>H
-    <span style="color:#75715e"># 还原移位操作、进行逆变换，得到处理后的图像</span>
-    r <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>fft<span style="color:#f92672">.</span>ifftshift(fshift)
-    r <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>fft<span style="color:#f92672">.</span>ifft2(r)
-    r <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>uint8(np<span style="color:#f92672">.</span>abs(r))
-    <span style="color:#75715e"># 标准化（处理越界）</span>
-    cv2<span style="color:#f92672">.</span>normalize(r, r, <span style="color:#ae81ff">0</span>, <span style="color:#ae81ff">255</span>, cv2<span style="color:#f92672">.</span>NORM_MINMAX)
-    <span style="color:#66d9ef">return</span> r
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ff79c6">def</span> <span style="color:#50fa7b">process</span>(img, D):
+    f <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>fft<span style="color:#ff79c6">.</span>fft2(img)   <span style="color:#6272a4"># 作二维傅里叶变换</span>
+    <span style="color:#6272a4"># 移位操作即将得到矩阵左上与右下、右上与左下交换</span>
+    <span style="color:#6272a4"># 将高频分量集中到矩阵中心便于滤波</span>
+    fshift <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>fft<span style="color:#ff79c6">.</span>fftshift(f)
+    height <span style="color:#ff79c6">=</span> <span style="color:#8be9fd;font-style:italic">len</span>(fshift)
+    width <span style="color:#ff79c6">=</span> <span style="color:#8be9fd;font-style:italic">len</span>(fshift[<span style="color:#bd93f9">0</span>])
+    <span style="color:#6272a4"># 得到滤波器H</span>
+    H <span style="color:#ff79c6">=</span> HPF(width,height,D)
+    <span style="color:#6272a4"># 计算变换后的像素</span>
+    fshift <span style="color:#ff79c6">=</span> fshift<span style="color:#ff79c6">*</span>H
+    <span style="color:#6272a4"># 还原移位操作、进行逆变换，得到处理后的图像</span>
+    r <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>fft<span style="color:#ff79c6">.</span>ifftshift(fshift)
+    r <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>fft<span style="color:#ff79c6">.</span>ifft2(r)
+    r <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>uint8(np<span style="color:#ff79c6">.</span>abs(r))
+    <span style="color:#6272a4"># 标准化（处理越界）</span>
+    cv2<span style="color:#ff79c6">.</span>normalize(r, r, <span style="color:#bd93f9">0</span>, <span style="color:#bd93f9">255</span>, cv2<span style="color:#ff79c6">.</span>NORM_MINMAX)
+    <span style="color:#ff79c6">return</span> r
 </code></pre></div><h3 id="理想低通滤波器">理想低通滤波器</h3>
 <p>以\(D_0\)为半径的圆内所有频率分量无损的通过，圆外的所有频率分量完全衰减。令\(D(u,v)=\sqrt{u^2+v^2}\)则：</p>
 <p>\[
@@ -154,14 +154,14 @@ H(u,v)=\begin{cases}
 \end{cases}
 \]</p>
 <p>理想低通滤波器的实现：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">LPF</span>(width,height,D):
-    <span style="color:#75715e"># 理想低通滤波器</span>
-    H <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>ones([width,height])
-    <span style="color:#66d9ef">for</span> i <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,height):
-        <span style="color:#66d9ef">for</span> j <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,width):
-            <span style="color:#66d9ef">if</span> math<span style="color:#f92672">.</span>sqrt((i<span style="color:#f92672">-</span>height<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span><span style="color:#f92672">+</span>(j<span style="color:#f92672">-</span>width<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span>) <span style="color:#f92672">&gt;</span> D :
-                H[i,j] <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
-    <span style="color:#66d9ef">return</span> H
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ff79c6">def</span> <span style="color:#50fa7b">LPF</span>(width,height,D):
+    <span style="color:#6272a4"># 理想低通滤波器</span>
+    H <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>ones([width,height])
+    <span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,height):
+        <span style="color:#ff79c6">for</span> j <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,width):
+            <span style="color:#ff79c6">if</span> math<span style="color:#ff79c6">.</span>sqrt((i<span style="color:#ff79c6">-</span>height<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">+</span>(j<span style="color:#ff79c6">-</span>width<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span>) <span style="color:#ff79c6">&gt;</span> D :
+                H[i,j] <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+    <span style="color:#ff79c6">return</span> H
 </code></pre></div><p>滤波效果：</p>
 <p><img src="../images/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86_%E7%90%86%E6%83%B3%E4%BD%8E%E9%80%9A%E6%BB%A4%E6%B3%A2%E5%99%A8.png" alt="理想低通滤波器"></p>
 <p>理想低通滤波器存在的问题：</p>
@@ -175,13 +175,13 @@ H(u,v)=\begin{cases}
 H(u,v)=\frac{1}{1+(\frac{\sqrt{u^2+v^2}}{D_0})^{2n}}
 \]</p>
 <p>巴特沃斯低通滤波器的实现：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">BLF</span>(width,height,D):
-    <span style="color:#75715e"># Butterworth高通滤波器</span>
-    H <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>ones([width,height])
-    <span style="color:#66d9ef">for</span> i <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,height):
-        <span style="color:#66d9ef">for</span> j <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,width):
-            H[i,j] <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span><span style="color:#f92672">/</span>(<span style="color:#ae81ff">1</span><span style="color:#f92672">+</span>((i<span style="color:#f92672">-</span>height<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span><span style="color:#f92672">+</span>(j<span style="color:#f92672">-</span>width<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">/</span>D<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span>)
-    <span style="color:#66d9ef">return</span> H
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ff79c6">def</span> <span style="color:#50fa7b">BLF</span>(width,height,D):
+    <span style="color:#6272a4"># Butterworth高通滤波器</span>
+    H <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>ones([width,height])
+    <span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,height):
+        <span style="color:#ff79c6">for</span> j <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,width):
+            H[i,j] <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">/</span>(<span style="color:#bd93f9">1</span><span style="color:#ff79c6">+</span>((i<span style="color:#ff79c6">-</span>height<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">+</span>(j<span style="color:#ff79c6">-</span>width<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">/</span>D<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span>)
+    <span style="color:#ff79c6">return</span> H
 </code></pre></div><p>滤波效果：</p>
 <p><img src="../images/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86_Butterworth%E4%BD%8E%E9%80%9A%E6%BB%A4%E6%B3%A2%E5%99%A8.png" alt="Butterworth低通滤波器"></p>
 <p>巴特沃斯低通滤波器的优点是：</p>
@@ -208,14 +208,14 @@ H(u,v)=\begin{cases}
 \end{cases}
 \]</p>
 <p>理想高通滤波器的实现：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">HPF</span>(width,height,D):
-    <span style="color:#75715e"># 理想高通滤波器</span>
-    H <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>ones([width,height])
-    <span style="color:#66d9ef">for</span> i <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,height):
-        <span style="color:#66d9ef">for</span> j <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,width):
-            <span style="color:#66d9ef">if</span> math<span style="color:#f92672">.</span>sqrt((i<span style="color:#f92672">-</span>height<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span><span style="color:#f92672">+</span>(j<span style="color:#f92672">-</span>width<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span>) <span style="color:#f92672">&lt;=</span> D :
-                H[i,j] <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
-    <span style="color:#66d9ef">return</span> H
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ff79c6">def</span> <span style="color:#50fa7b">HPF</span>(width,height,D):
+    <span style="color:#6272a4"># 理想高通滤波器</span>
+    H <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>ones([width,height])
+    <span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,height):
+        <span style="color:#ff79c6">for</span> j <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,width):
+            <span style="color:#ff79c6">if</span> math<span style="color:#ff79c6">.</span>sqrt((i<span style="color:#ff79c6">-</span>height<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">+</span>(j<span style="color:#ff79c6">-</span>width<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span>) <span style="color:#ff79c6">&lt;=</span> D :
+                H[i,j] <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+    <span style="color:#ff79c6">return</span> H
 </code></pre></div><p>滤波效果：</p>
 <p><img src="../images/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86_%E7%90%86%E6%83%B3%E9%AB%98%E9%80%9A%E6%BB%A4%E6%B3%A2%E5%99%A8.png" alt="理想高通滤波器"></p>
 <h3 id="巴特沃斯高通滤波器">巴特沃斯高通滤波器</h3>
@@ -223,13 +223,13 @@ H(u,v)=\begin{cases}
 H(u,v)=\frac{1}{1+(\frac{D_0}{\sqrt{u^2+v^2}})^{2n}}
 \]</p>
 <p>巴特沃斯高通滤波器的实现：</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">def</span> <span style="color:#a6e22e">BHF</span>(width,height,D):
-    <span style="color:#75715e"># Butterworth高通滤波器</span>
-    H <span style="color:#f92672">=</span> np<span style="color:#f92672">.</span>ones([width,height])
-    <span style="color:#66d9ef">for</span> i <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,height):
-        <span style="color:#66d9ef">for</span> j <span style="color:#f92672">in</span> range(<span style="color:#ae81ff">0</span>,width):
-            H[i,j] <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span><span style="color:#f92672">/</span>(<span style="color:#ae81ff">1</span><span style="color:#f92672">+</span>D<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span><span style="color:#f92672">/</span>((i<span style="color:#f92672">-</span>height<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span><span style="color:#f92672">+</span>(j<span style="color:#f92672">-</span>width<span style="color:#f92672">/</span><span style="color:#ae81ff">2</span>)<span style="color:#f92672">**</span><span style="color:#ae81ff">2</span><span style="color:#f92672">+</span><span style="color:#ae81ff">0.00001</span>))
-    <span style="color:#66d9ef">return</span> H
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#ff79c6">def</span> <span style="color:#50fa7b">BHF</span>(width,height,D):
+    <span style="color:#6272a4"># Butterworth高通滤波器</span>
+    H <span style="color:#ff79c6">=</span> np<span style="color:#ff79c6">.</span>ones([width,height])
+    <span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,height):
+        <span style="color:#ff79c6">for</span> j <span style="color:#ff79c6">in</span> <span style="color:#8be9fd;font-style:italic">range</span>(<span style="color:#bd93f9">0</span>,width):
+            H[i,j] <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">/</span>(<span style="color:#bd93f9">1</span><span style="color:#ff79c6">+</span>D<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">/</span>((i<span style="color:#ff79c6">-</span>height<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">+</span>(j<span style="color:#ff79c6">-</span>width<span style="color:#ff79c6">/</span><span style="color:#bd93f9">2</span>)<span style="color:#ff79c6">**</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">+</span><span style="color:#bd93f9">0.00001</span>))
+    <span style="color:#ff79c6">return</span> H
 </code></pre></div><p>滤波效果：</p>
 <p><img src="../images/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86_Butterworth%E9%AB%98%E9%80%9A%E6%BB%A4%E6%B3%A2%E5%99%A8.png" alt="Butterworth高通滤波器"></p>
 <h3 id="指数高通滤波器">指数高通滤波器</h3>
