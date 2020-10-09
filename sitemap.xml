@@ -3,18 +3,28 @@
   xmlns:xhtml="http://www.w3.org/1999/xhtml">
   
   <url>
+    <loc>https://MilesChing.github.io/tags/kubernetes/</loc>
+    <lastmod>2020-10-03T08:33:10+08:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://MilesChing.github.io/posts/kubernetes/replicaset-src/</loc>
+    <lastmod>2020-10-03T08:33:10+08:00</lastmod>
+  </url>
+  
+  <url>
     <loc>https://MilesChing.github.io/</loc>
-    <lastmod>2019-08-07T00:00:00+00:00</lastmod>
+    <lastmod>2020-10-03T08:33:10+08:00</lastmod>
   </url>
   
   <url>
     <loc>https://MilesChing.github.io/posts/</loc>
-    <lastmod>2019-08-07T00:00:00+00:00</lastmod>
+    <lastmod>2020-10-03T08:33:10+08:00</lastmod>
   </url>
   
   <url>
     <loc>https://MilesChing.github.io/tags/</loc>
-    <lastmod>2019-08-07T00:00:00+00:00</lastmod>
+    <lastmod>2020-10-03T08:33:10+08:00</lastmod>
   </url>
   
   <url>

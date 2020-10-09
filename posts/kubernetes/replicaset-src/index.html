@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+<title>Kubernetes Controller：从 ReplicaSet 开始 - MilesChing</title>
+
+<meta name="description" content="在 Kubernetes Control Plane 提供的多个原生工作负载（Workload）中，ReplicaSet 是最简单和基础的一个。本文对 Kubernetes Controller 的普适性结构设计和其中一部分细节作了介绍，并借此对 ReplicaSet Controller 的源代码进行了分析。
+Kubernetes 控制平台 Kubernetes 的声明式（Declarative）接口不仅是与命令式接口并列的某种交互方法，而是深深根植于它控制平台的全部设计。在这个声明式交互的系统中，系统管理员通过声明对象（Object）将自己期望的行为或运行方式告知系统，系统通过对现有对象的观察和解析不断改变自己的行为。这里的对象即 Storage 中的一个 Structure，其各字段和语义都已事先被系统和使用者约定，管理员与系统的交互方式并非通过命令语句而仅仅通过对这些 Structure 的创建、删除和修改。对于每种不同的 Structure 类型，Kubernetes 通过一个对应的 Controller 来处理上述观察、解析和系统行为的调整。
+ 在机器人技术和自动化技术中，控制循环是调节系统状态的无终止循环。
+ Kubernetes Controller 是监视集群状态的控制循环，在每个循环中根据需要做出或请求更改。每个 Controller 监控至少一个 Kubernetes 资源类型，负责其全部对象实例的正常功能，试图做出行为将当前的集群状态移动到更接近期望的状态。这些对象一般具有表示所需状态的 Spec 字段和表示当前状态的 Status 字段。Spec 是让用户写入期望的状态，系统可以通过 Spec 读出用户的期望。Status 是系统写入观察到的状态，用户可以从中读出系统当前是什么状态。Controller 用以维护集群的这些 “行为” 绝大多数通过调用 API Server 得以完成，且大多数同样是基于声明式系统的。举例来说，ReplicaSet 是一个负责调整 Container 数量的 Controller ，但它在需要创建和删除 Container 时仅仅需要在数据库中创建或删除 Pod 对象即可，Pod Controller 会立即关注到这些改动并实际创建出所需的 Container 以完成它的工作。在这个过程中 API Server 提供了在数据库中创建、删除和修改对象的统一接口，但实际工作是由 Controller 完成的。实际上这种通过 Object 的交互是 Controller 之间协作的普遍方式（如 Deployment 与 ReplicaSet 的协作）。">
+<meta name="author" content="Zhengrui Qin">
+<link rel="canonical" href="https://MilesChing.github.io/posts/kubernetes/replicaset-src/" />
+<script type="text/javascript" src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+</script>
+
+<link href="https://MilesChing.github.io/css/stylesheet.min.b586bb73b58454ff4b718aeeac706dc5905a304180a33507fa016cb1ce2c87f3.css" integrity="sha256-tYa7c7WEVP9LcYrurHBtxZBaMEGAozUH&#43;gFssc4sh/M=" rel="preload stylesheet"
+    as="style">
+
+<link rel="apple-touch-icon" href="https://MilesChing.github.io/apple-touch-icon.png">
+<link rel="icon" href="https://MilesChing.github.io/favicon.ico">
+<meta name="generator" content="Hugo 0.68.3" />
+
+</head>
+
+<body class="single" id="top">
+<script>
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+</script>
+<header class="header">
+    <nav class="nav">
+        <p class="logo"><a href="https://MilesChing.github.io/">MilesChing</a></p>
+        <ul class="menu" id="menu" onscroll="menu_on_scroll()">
+            <li>
+                <a href="https://MilesChing.github.io/posts/">
+                    <span>
+                        Posts
+                    </span>
+                </a>
+            </li>
+            <li>
+                <a href="https://MilesChing.github.io/tags/">
+                    <span>
+                        Tags
+                    </span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</header>
+    <main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    <h1 class="post-title">
+      Kubernetes Controller：从 ReplicaSet 开始
+    </h1>
+    <div class="post-meta">
+      <time>October 3, 2020</time>&nbsp;·&nbsp;18 min&nbsp;·&nbsp;Zhengrui Qin
+    </div>
+  </header>
+  <figure class="single-cover">
+    <img src="https://cdn.lynda.com/static/landing/images/hero/MasterCloudNativeInfrastructurewithKubernetes_LP_1200x630-1548277017303.jpg" alt="cover image for Kubernetes Controller：从 ReplicaSet 开始">
+  </figure>
+  <div class="toc">
+    <details  open>
+      <summary>
+        <div class="details">Table of Contents</div>
+      </summary>
+      <blockquote><ul><li>
+        <a href="#kubernetes-%e6%8e%a7%e5%88%b6%e5%b9%b3%e5%8f%b0">Kubernetes 控制平台</a><ul>
+            <li>
+        <a href="#controller-manager">Controller Manager</a></li><li>
+        <a href="#controller-%e8%ae%be%e8%ae%a1%e6%80%9d%e6%83%b3">Controller 设计思想</a></li><li>
+        <a href="#controller-%e4%b8%80%e8%88%ac%e7%bb%93%e6%9e%84">Controller 一般结构</a><ul>
+            <li>
+        <a href="#informer">Informer</a></li><li>
+        <a href="#event-handler">Event Handler</a></li><li>
+        <a href="#work-queue-%e5%92%8c-worker">Work Queue 和 Worker</a></li></ul>
+    </li></ul>
+    </li><li>
+        <a href="#replicaset">ReplicaSet</a><ul>
+            <li>
+        <a href="#replicaset-spec">ReplicaSet Spec</a></li><li>
+        <a href="#replicaset-status">ReplicaSet Status</a></li></ul>
+    </li><li>
+        <a href="#replicaset-controller-%e5%ae%9e%e7%8e%b0%e7%bb%86%e8%8a%82">ReplicaSet Controller 实现细节</a><ul>
+            <li>
+        <a href="#%e5%88%9d%e5%a7%8b%e5%8c%96%e5%92%8c%e5%90%af%e5%8a%a8">初始化和启动</a></li><li>
+        <a href="#event-handlers">Event Handlers</a><ul>
+            <li>
+        <a href="#add-replicaset">Add ReplicaSet</a></li><li>
+        <a href="#update-replicaset">Update ReplicaSet</a></li><li>
+        <a href="#delete-replicaset">Delete ReplicaSet</a></li><li>
+        <a href="#add-pod">Add Pod</a></li><li>
+        <a href="#update-pod">Update Pod</a></li></ul>
+    </li><li>
+        <a href="#worker">Worker</a><ul>
+            <li>
+        <a href="#process-next-work-item">Process Next Work Item</a></li><li>
+        <a href="#sync-replicaset">Sync ReplicaSet</a></li></ul>
+    </li><li>
+        <a href="#expectations">Expectations</a></li></ul>
+    </li><li>
+        <a href="#%e5%b0%be%e5%a3%b0">尾声</a></li></ul>
+      </blockquote>
+    </details>
+  </div>
+  <div class="post-content"><p>在 Kubernetes Control Plane 提供的多个原生工作负载（Workload）中，ReplicaSet 是最简单和基础的一个。本文对 Kubernetes Controller 的普适性结构设计和其中一部分细节作了介绍，并借此对 ReplicaSet Controller 的源代码进行了分析。</p>
+<h2 id="kubernetes-控制平台">Kubernetes 控制平台</h2>
+<p>Kubernetes 的声明式（Declarative）接口不仅是与命令式接口并列的某种交互方法，而是深深根植于它控制平台的全部设计。在这个声明式交互的系统中，系统管理员通过声明对象（Object）将自己期望的行为或运行方式告知系统，系统通过对现有对象的观察和解析不断改变自己的行为。这里的对象即 Storage 中的一个 Structure，其各字段和语义都已事先被系统和使用者约定，管理员与系统的交互方式并非通过命令语句而仅仅通过对这些 Structure 的创建、删除和修改。对于每种不同的 Structure 类型，Kubernetes 通过一个对应的 Controller 来处理上述观察、解析和系统行为的调整。</p>
+<blockquote>
+<p>在机器人技术和自动化技术中，控制循环是调节系统状态的无终止循环。</p>
+</blockquote>
+<p>Kubernetes Controller 是监视集群状态的控制循环，在每个循环中根据需要做出或请求更改。每个 Controller 监控至少一个 Kubernetes 资源类型，负责其全部对象实例的正常功能，试图做出行为将当前的集群状态移动到更接近期望的状态。这些对象一般具有表示所需状态的 Spec 字段和表示当前状态的 Status 字段。Spec 是让用户写入期望的状态，系统可以通过 Spec 读出用户的期望。Status 是系统写入观察到的状态，用户可以从中读出系统当前是什么状态。Controller 用以维护集群的这些 “行为” 绝大多数通过调用 API Server 得以完成，且大多数同样是基于声明式系统的。举例来说，ReplicaSet 是一个负责调整 Container 数量的 Controller ，但它在需要创建和删除 Container 时仅仅需要在数据库中创建或删除 Pod 对象即可，Pod Controller 会立即关注到这些改动并实际创建出所需的 Container 以完成它的工作。在这个过程中 API Server 提供了在数据库中创建、删除和修改对象的统一接口，但实际工作是由 Controller 完成的。实际上这种通过 Object 的交互是 Controller 之间协作的普遍方式（如 Deployment 与 ReplicaSet 的协作）。</p>
+<h3 id="controller-manager">Controller Manager</h3>
+<p>从逻辑上讲，每个 Controller 都是一个单独的进程，但为了降低复杂性，它们被编译成同一个二进制文件，并在单个进程中运行（即 Kube Controller Manager）。Controller Manager 初始化共享资源 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/controllermanager.go#L289">Controller Context</a> ，包括 Informer Factory 、Client Factory 、Cloud Provider Interface 、Common Configuration 等，并并行运行所有 Controller 。在函数 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/controllermanager.go#L372"><code>NewControllerInitializers</code></a> 你可以看到 Controller 的入口被初始化，在 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/cmd/kube-controller-manager/app/controllermanager.go#L159"><code>Run</code></a> 中它们被并行启动。多个 Controller Manager 实例之间通过 Leader Election 的方式协作以保证其可用性，这里我们不多赘述 Controller Manager 的细节。</p>
+<p><img src="https://d33wubrfki0l68.cloudfront.net/7016517375d10c702489167e704dcb99e570df85/7bb53/images/docs/components-of-kubernetes.png" alt="Kubernetes 控制平台"></p>
+<h3 id="controller-设计思想">Controller 设计思想</h3>
+<p>总结起来，Controller 的工作即监控用户定义的对象并在 Status 与 Spec 不一致时采取相应的行动，这种 “监控” 是以 Control Loop 的形式完成的。声明式的用户交互以及控制循环式的 Controller 使我们得以让整个控制行为变得无状态（Stateless），而无状态恰恰是 Kubernetes 保证可靠性的关键。<b>这里的无状态并不是指控制系统不存储状态或不依赖当前状态，而是指控制系统没有对过去状态的依赖，或不要求在时间上具有控制的“连续性”。</b>通俗地讲，这样的控制系统可以在任何时候重启，因为它仅仅针对当前状态与期望状态的差异行事，而不依赖之前发生了什么，也就是说它可以在任何时候崩溃，我们只需要保证系统能被及时重新启动。这种只依赖当前状态的 “无状态” 也可称为基于水平触发的（Level Driven），它的对立面边缘触发的（Edge Driven）或基于事件的。</p>
+<p><img src="https://www.oreilly.com/library/view/programming-kubernetes/9781492047094/assets/prku_0103.png" alt="Level Driven"></p>
+<p>上图选自 <a href="https://learning.oreilly.com/library/view/programming-kubernetes/9781492047094/"><em>Programming Kubernetes by Michael Hausenblas, Stefan Schimanski</em></a> ，形象地描述了 Controller 这种 Level Driven 的思想。实际上水平触发虽然不依赖历史状态，但总是显得不如边缘触发那样有效率，因为我们一般必须使用轮询的方法以不断检测边缘，正如图中的 “get-compare-update” 过程，一个盲目的轮询会导致即便当前状态没有发生变化 Controller 也在不停运行，而不像由事件触发的处理程序那样精准地只在变化发生时运行。另外，Level Driven 的系统对于突发边缘的响应速度（最大延迟）取决于轮询的频率，而增大轮询的频率又会增大系统稳定时轮询的资源浪费。为此，<b>Kubernetes Controller 使用一些边缘触发的事件来触发只基于当前状态的控制流程，从而使整个控制流程具有 Level Driven 的可靠性和 Edge Driven 的快速响应</b>。我们通常称 Controller 是 Level Driven 的，其实这只是对它行为特征的描述，并非对实现原理的描述。</p>
+<blockquote>
+<p>If an API object appears with a marker value of true, you can&rsquo;t count on having seen it turn from false to true, only that you now observe it being true. Even an API watch suffers from this problem, so be sure that you&rsquo;re not counting on seeing a change unless your controller is also marking the information it last made the decision on in the object&rsquo;s status.</p>
+</blockquote>
+<h3 id="controller-一般结构">Controller 一般结构</h3>
+<p>无论 Kubernetes 原生 Controller 或是可被自定义来扩展 Kubernetes 的 Custom Controller 都具有类似的结构。对于这个几乎全部 Controller 都采用的模式，<a href="https://github.com/kubernetes/community/blob/8decfe4/contributors/devel/controllers.md#rough-structure">Writing Controllers</a> 一文中给出了对应的代码结构（Rough Structure）。另外，我个人认为此文中给出的 11 条 Guideline 对于理解 Controller 的设计和具体实现细节都是有巨大帮助的，推荐阅读。</p>
+<div class="mxgraph" style="max-width:100%;border:1px solid transparent;" data-mxgraph="{&quot;highlight&quot;:&quot;#0000ff&quot;,&quot;target&quot;:&quot;blank&quot;,&quot;lightbox&quot;:false,&quot;nav&quot;:true,&quot;resize&quot;:true,&quot;toolbar&quot;:&quot;zoom&quot;,&quot;edit&quot;:&quot;_blank&quot;,&quot;xml&quot;:&quot;&lt;mxfile host=\&quot;app.diagrams.net\&quot; modified=\&quot;2020-10-05T01:33:08.247Z\&quot; agent=\&quot;5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36 Edg/85.0.564.68\&quot; etag=\&quot;lb98yqWE2qXIio0R3gga\&quot; version=\&quot;13.7.7\&quot; type=\&quot;device\&quot;&gt;&lt;diagram id=\&quot;5JrG2Wsmwt4hK1JBAV3a\&quot; name=\&quot;Page-1\&quot;&gt;7Vpbk6I4FP41Pg4F4aaPre3OdWt6x6p15jEDUTKDxA2x1fn1m0CixKDSo6htDVZ1k0MSyHe+c8mBjjuYrd5SOE/+JjFKO8COVx33sQOAY9uA/xOSdSkJgrAUTCmOZaetYIR/ITVSShc4RrnWkRGSMjzXhRHJMhQxTQYpJUu924Sk+l3ncIoMwSiCqSkd45glpbQLwq38HcLTRN3ZCXrllRlUneVK8gTGZFkRucOOO6CEsPJsthqgVICncCnH/bXn6ubBKMpYkwG96MN6OU6+LD6sAzQev2H/hsM3cpZnmC7kgh+e3nPBCNFnROWDs7VCg8/IgeeN/jLBDI3mMBJXllz3XJawWcpbDj+F+bzUxgSvEH+AvrwPogyt9i7A2cDC+YTIDDG65l3kAE8CKZkUyuayohYpSioaUTIoiTDdzLvFip9IuF4AHTCgG5CMUZKmNcBRsshiAcSj3QC8FE8zfp6iCV9EX4CGOSMfpJiR+XkABa6nIeoGBqJuEJiQgtBrCVPXwPR9NiF0di5EI44Mn8vEdIbjWMx8Flh9HdYaojrBJZnqGaiahp3FD8JbCoxSmOc40gFEK8y+Vs6/CdwtX7YeV1INRWOtGtwa1l+rjcoo0dwOK1pqXPlwKDYc844C+ALIgkbouHtjkE4RO8Y7U6EVjfk1ClMyilLI8LP+uHValHd4IpgvZMMXt6c7NifcIUK5TDmq6uF3JtoMVBM5OxOVOBgTFaTaLPv3eeYbPPuEc/F8HRDAmTDJ8i+XjCGLEoOF3ObY7xouRTn+Bb8XUwkWzcUqi3X7/Y7/KOZaMJKXCYaYeoLTdEBSQot7u5PiOI8HcNwdRdjNYhVozQM4BtbCvkaySShLyJRkMB1upX3dw277fCIiABUY/kCMrWXSJuA9o9NwruY0gqZOI6wnQWN3cJJKA8PYxoT+5JJ/FohLTgqX+0zDsMYz2Iq767R6NeEyDC9oLCo8HoqXU47nfO/q5WZEeqPO5lFfkOsGOirdGlDU1qoKSgBaAkWFkgoow2dURJ93MItPznnPS7kDej0Y5XsHovz5Ie3dLaSKxRqHPYPCF4Ub3C+D5TRd3WVcGW6ztHBncDtAD1zguoCrnPMV5XjX2xjKQsPRHK/00SfkeMVQvrWG60oHuTfZuyP0HN1zOnZvhx7ljGfdvbnuH/405g9oWlkIrsEfv7vjmpywyp/j/UP7YH/Xr69YNO0PbK1/S3zuGgHIIHjbabyxcK9ZIaC9INGgFnhrYbhU5MG8PQRWCCo/14TUc6xAO1qrYZtlsFcLsapoWx7Qfq7OaivcOQyS35SCzNLJa1eQZ3W96q+n6ce3fP24bfWEhnpEZesV7BeOKCm0QB3Iartmudph7iZuSUkeMJT0hCNRfvz8/Yd48wvsj0isfcIBB/YXxGNphFOcTQ0tmkX/nFHyEyllZSRDL3oTUEcEnSotlv49X0+lQFBTuXNqQn57tX/zpeow+68sEmvayu9dNeqjDZW11qkGXFQ1vgH5BbdctgXUPutb5dLL9lzgBjftZZJ7rRcznpli730N+haxihHetfUB9SXJgfc8dV9FeK0ZX3BV49PqHWHTgse2xrEx2QvZntfQ+Paw4EK2Z+aOn+eIQma+EL1v66pLO9RnSSeGNt7cfrRYFmu2n366w/8B&lt;/diagram&gt;&lt;/mxfile&gt;&quot;}"></div>
+<script type="text/javascript" src="https://viewer.diagrams.net/js/viewer-static.min.js"></script>
+<h4 id="informer">Informer</h4>
+<p>Informer 对 ETCD 中的 Object 变更（创建、删除、修改）进行监控。<a href="https://github.com/kubernetes/client-go">Client-go</a> 库中实现了多种 Informer ，一般每种类型的资源对应同一个 Informer 实例。Informer 通过 API Server 为某种资源提供的 Watch 方法来监控变更，Watch 方法允许与 API Server 建立一个长连接，当数据库中有变更发生时，API Server 会发送变更的部分从而告知 Informer ，Informer 会将同样的变更应用到自己的本地副本（Local Cache）中。从而 Informer 可以维护一份包含某种资源的全部实例的本地副本，并时刻与 ETCD 同步。</p>
+<p>Informer 的存在为 Controller 提供了两个功能：</p>
+<ul>
+<li>只读地从它维护的本地副本（Local Cache）中 Get 或 List 对象，这会比每次都从 API Server 请求大量对象快得多；</li>
+<li>通过向它注册 Event Handler ，Controller 也能捕获到数据库中的对象更改，并处理这些对象变更事件。<b>这些事件实际上就是上文所说的 Edge</b> ，见 <a href="https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes">Efficient Detection of Changes</a>。</li>
+</ul>
+<h4 id="event-handler">Event Handler</h4>
+<p>Event Handler 是捕获 Edge 并触发 Level Driven 处理过程的关键。它们其实就是数据库中数据变更事件的处理程序。一般，这些变更事件包括了 Kubernetes Controller 需要被触发的全部时机，因为<b>只有对象当前状态的变化才可能导致当前状态偏离期望状态，假如当前状态始终处于期望态且不发生变化，则该对象不需要处理。</b></p>
+<p>然而在现实情况中，我们并不能保证每个变更事件都被监控到并成功处理。假如 Watch 连接断开那么若干变更事件可能被错失，还有 Controller 本身的崩溃也会导致状态长时间偏离期望值。仅仅注册 Event Handler 使得我们的 Controller 又陷入 Edge Driven 。考虑到这些问题容易想到：<b>轮询是必须的，尽管可以以很低的频率进行。这意味着存在一个频率非常低的轮询，它每隔一段时间便检查当前状态是否是期望状态，若不是则触发控制循环调整当前状态；除此以外，被监控到的变更事件也会触发控制循环，从而保证大多数时候 Controller 都有低响应延迟，而且即便事件被错失 Controller 也能及时触发控制循环来纠正状态。</b>这一低频率轮询是通过 Informer 的 Periodical Resync 实现的。每隔一段时间 Informer 会与 API Server 同步本地缓存中的全部对象，并将检测到的差异转化为普通事件来调用 Event Handler 。即便一些对象没有发生变化，它们仍会被视为发生了 Update 事件；若某对象被发现出现在 ETCD 中却不存在于 Local Cache 中，说明该对象的创建事件被错失，Informer 会产生一个 Create 事件；反之若 Local Cache 中的某对象不存在于 ETCD ，Informer 会产生一个 <code>DeletedFinalStateUnkown</code> 事件以表明错失了 Delete 事件，且该对象被 Delete 时的最终状态未知。</p>
+<blockquote>
+<p>Watches and Informers will “sync”. Periodically, they will deliver every matching object in the cluster to your Update method. This is good for cases where you may need to take additional action on the object, but sometimes you know there won&rsquo;t be more work to do.</p>
+</blockquote>
+<p>回归 Event Handler 的处理程序本身，它实际上过滤掉了不需要处理的情况（例如上面提到的对象本身没有发生变化，但由 Informer 在同步时产生的 Update 事件）；对于每个需要处理的情况，Informer 将实际状态可能偏离期望状态的 Object 的索引（Namespaced Name）放入工作队列。</p>
+<blockquote>
+<p>Many controllers must trigger off multiple resources (I need to &ldquo;check X if Y changes&rdquo;), but nearly all controllers can collapse those into a queue of “check this X” based on relationships. For instance, a ReplicaSet controller needs to react to a pod being deleted, but it does that by finding the related ReplicaSets and queuing those.</p>
+</blockquote>
+<h4 id="work-queue-和-worker">Work Queue 和 Worker</h4>
+<p>为了处理不同实例，Queue &amp; Worker 结构被采用。Work Queue 中的 Item 是由 Event Handler 放入的 Object Key ，而每个 Worker 取出 Item 后，对该 Item 指向的 Object 执行一个 Control Loop（在某些 Controller 中将这些 Worker 称为 Reconciler，将 Control Loop 称为 Reconcile ，无论如何我们在下文中使用 Control Loop 这个名词，因为这十分直观地表示了它是对于某个 ReplicaSet 实例的周期性处理过程中的一个周期）。Control Loop 是一个完全 Level Driven 的过程，在一次循环中它首先获取待处理对象的当前状态，将它与对象中指定的期望状态相比较，做出决策并采取行动使其收敛到期望状态。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#ff79c6">for</span> {
+  desired <span style="color:#ff79c6">:=</span> <span style="color:#50fa7b">getDesiredState</span>()
+  current <span style="color:#ff79c6">:=</span> <span style="color:#50fa7b">getCurrentState</span>()
+  <span style="color:#50fa7b">makeChanges</span>(desired, current)
+}
+</code></pre></div><p>值得注意的是，这里的 Work Queue 不同于普遍意义上的任务队列：</p>
+<ul>
+<li>Work Queue 中 Item 的意义在于触发 Worker 执行一个 Control Loop 以检查对应 Object 的最新状态，所以实际上同一 Object Key 在 Queue 中存在多个副本并无意义，某个 Object Key 是否需要被处理以及需要被处理的紧急程度（在队列中的排位）才有意义；</li>
+<li>Work Queue 需要保证同一个 Item 不会被多个 Worker 并行处理，多个 Control Loop 同时调整同一个 Object 会导致问题。</li>
+</ul>
+<p>因此，Work Queue 将其中的 Item 分为三种状态：等待处理中、正处理中且无新请求、正在处理中且有新请求（Dirty）。当某个 Item 被试图添加到队列，若它本身不在队列中则将它直接添加到队列中，否则 Queue 会先检查它为哪一种 Item ：若为等待处理中，则队列中已存在副本，忽略本次入队请求；若为 “处理中且无新请求” ，则该 Object 正被处理，但本次处理不一定会兼顾最新发生的状态变化，因此将其状态标记为“正在处理中且有新请求”；若为 “正在处理中且有新请求” ，则忽略本次入队请求；当每个处理过程（即 Control Loop）结束后，Queue 会检查被处理的 Object 是否有新请求，若有则将这个 Object 重新加入队列并将其改为无新请求。</p>
+<div class="mxgraph" style="max-width:100%;border:1px solid transparent;" data-mxgraph="{&quot;highlight&quot;:&quot;#0000ff&quot;,&quot;lightbox&quot;:false,&quot;nav&quot;:true,&quot;resize&quot;:true,&quot;toolbar&quot;:&quot;zoom&quot;,&quot;edit&quot;:&quot;_blank&quot;,&quot;xml&quot;:&quot;&lt;mxfile host=\&quot;app.diagrams.net\&quot; modified=\&quot;2020-10-05T08:13:16.365Z\&quot; agent=\&quot;5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Safari/537.36 Edg/85.0.564.68\&quot; etag=\&quot;TFWq5-f3_jAEZBapnYFW\&quot; version=\&quot;13.7.7\&quot; type=\&quot;device\&quot;&gt;&lt;diagram id=\&quot;PWjo5SgMpzYFB_Sw65JJ\&quot; name=\&quot;Page-1\&quot;&gt;7Ztdc6I8FMc/jZd9hhBeL1fr7l7sztOZzmz7XEaIQBeJE2PV59NvkCBCiNIqLzrbm5JDEsjv5Jwk/9IRnCy23yhahj+Jj+ORrvnbEXwc6TrQNJ3/Si27zGIDMzMENPJFpcLwHP2P85bCuo58vCpVZITELFqWjR5JEuyxkg1RSjblanMSl5+6RAGWDM8eimXrS+SzMLM6ul3Yv+MoCPMnA8vN7ixQXlmMZBUin2yOTHA6ghNKCMuuFtsJjlN4OZes3VfF3cOLUZywJg22T9PX0Hsf/3p6eJu8fPemLvvxYIhxvKN4LUYs3pbtcgQBJeulqIYpw9s68GiWV9fkFwOH4fJ5gskCM7rjVfKOoGiyOQJsCVt4DNcURiScGhz6KsbNL8TQP4AB6F1gOOEBGY6IF0NmYzk1bOzW0MDzaDiZxMdpL9oIjjdhxPDzEnnp3Q1PC9wWsgV/6iPgl0qEZ1FlXpJR9cfGkNj8O3vj0wBchmgexfGExITu20IfYWfucfuKUfIbH92xPAfP5q1AFd248vxzO0VsKhBfOAuriE3s+EYdYkefQctqEzFw+mbsKBibV2WMAads1zF2LRuidhj3xtSVmL4Q+htTbrswO3wekmqtEd3YpjwRAeiSWr5q1lHrbdlpSk2s2DXR3DFEeX5hn29qRZFQFpKAJCieFtZxmWVR5wchS0HwDTO2Ezt0tGakzBdvI/Z6dP1f2tU/uimKj1vR9b6wywsJH/DrcSFrZubFotm+lLfLBpiO6jOu5GjImnq4wa6HIRrgk3nHrZ8cFMeIRe/l97u+q+Wg6M3V9r27+ujU1oOrDdVGiO9BrZi/93jGs6QVpFdPlHh4tYqSQL73GFG2u+q6Pnc87NVuT2eOaZiFE9tIvlbPeyfDUrgFnnbLNfnPsVXP37fdmdYNf/Xi16k7XHkDIbHuTM8QTEDNHO1Y37Dl5NEClhMeGa6+YcsBfFl0fj7WMi8NSN9wZHXw5vQNFdShHL4d+aB4c4fvM4z71pAc1RptXHcdbnMf9PE02i3iEwf33uQOFbPByB0OUFPrbRVqSm0ococzoDPwwOSOPAWcPQPnm6CzZ2Cn1zOwA4fj6oHJHS24WnHK6cjVKrnjTs7V57Ls0M7V8l+Bb+7PcE2R98ZY3g3I6S7xv6RftfCSFyM+5726Zf9k+lCE9dGozZpR57bG0S+e8EQi/uADZFMvz2ugV2hm+Uu0KoCe78itdJTlN6mjvWcOw77AWboiILiNHyu0r1ESrUIeBlUP8mnLyj4rz/WEJOmqheIoSFIvc7/x/SAcpzM+8lD8RdxYRL6/X9/qIqwcg1JeS3+ahtJprcuwK26oOYgArWY+Vf1+vSiSv8mQfNC1Agh1mUrHCqDbowJo1MMaigLoDkcBdIemALp38GmICupA1ClXJQDekjr14RDv9mOcfAUaljylgDYYeQpog9SnGmIbij4FalD9FajKm7WzqoXbVLUQod6XbAG0vxJVl87uVaMC2h18nHwunfatigCtwfb8CrLIh+B0I5ZAt7yUPRgVyE3FkmpHsNJPy1oJ0FTfEXAbvCex5DMRBo2Kl2vEgm4lFKCpTn039N1H07zWusDOi8U/+WUhVfyrJJz+AQ==&lt;/diagram&gt;&lt;/mxfile&gt;&quot;}"></div>
+<script type="text/javascript" src="https://viewer.diagrams.net/js/viewer-static.min.js"></script>
+<blockquote>
+<p>所谓 “正在处理中且有新请求” ，意思是同一个 Key 需要被重新入队，但需要被延迟到本次处理完成，这也就保证 Control Loop 可再处理它一次来处理最新的状态变化，而之所以需要将入队延迟到本次处理完成，是为了防止同一 Item 被多个 Worker 并行处理。</p>
+</blockquote>
+<p>至此，Controller 的一般结构基本解释清楚。在 Informer 、Work Queue 等模块组成的这一整体架构的支持下，某个特定功能的 Controller 只要明确这几个问题：</p>
+<ol>
+<li>在哪些时机（时间），Controller 需要对一个 Object 进行检查和可能的处理？对于只关注 Pod 数量的 ReplicaSet 来说，是 Pod 被创建和删除等等导致 Pod 数量发生变化的时机；对于关注 Pod Metrics 的 Horizontal Pod Autoscaler 来说，每隔一段固定时间都需要对每个 Object 进行检查，因为 Metrics 总是在变化，而并非像离散的数量值一般有明显的 Edge 。这些时机决定了我们将以怎样的方式（例如定义哪些 Event Handler）向 Work Queue 中添加 Item 。它们要保证高效，但比高效更重要的是覆盖所有的情况，从而让 Controller 正确运行。</li>
+<li>对于一个特定的 Object ，Controller 需要收集怎样的当前状态信息，以及如何使用这些状态信息来做出行为决策。涉及 Object 的全部信息一般都从 Local Cache 中获取以提升效率，有时我们也可能从外部获取一些其他信息。覆盖所有的情况且保证 Control Loop 始终是 Level Driven 的都很重要，这决定了 Control Loop 的逻辑是否有效、可靠。Control Loop 可以在一个周期内也可在多个周期内使当前状态收敛到期望状态，但要注意避免多个周期的重复操作以及非精确的操作引起的状态震荡。</li>
+</ol>
+<p>将这些作以总结后，我将介绍一些 ReplicaSet 具体的实现细节以作为前文抽象内容的一个具体示例。</p>
+<h2 id="replicaset">ReplicaSet</h2>
+<p>RepicaSet 是通过一组字段来定义的，包括一个用来识别其所管理的 Pod 的集合的选择算符（Label Selector），一个用来标明应该维护的副本个数的数值（Replicas），一个用来指定应该创建新 Pod 以满足副本个数条件时要使用的 Pod 模板（Pod Template）等等。ReplicaSet 对象的完整结构可在 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/staging/src/k8s.io/api/apps/v1/types.go#L666"><code>types.go</code></a> 查看。如其它对象一样，Spec 定义了用户对于某个 ReplicaSet 对象的期望状态，而 Status 为由 Controller 更新，显示了这个对象的当前状态。</p>
+<h3 id="replicaset-spec">ReplicaSet Spec</h3>
+<ul>
+<li><code>replicas</code>：用户期望的副本数，默认为 1 。如果将全体被当前 ReplicaSet 所管理的 Pod 看作一个集合，Replicas 字段规定了集合的大小。ReplicaSet Controller 需要对这个集合的任何数量变化作出相应，以使其大小等于用户设定的 Replicas 。</li>
+<li><code>minReadySeconds</code>：规定新创建的 Pod 在无容器发生错误的条件下，最少准备多少秒后才可被认为 Available ，默认为 0 。</li>
+<li><code>selector</code>：即 Label Selector ，通过设定此字段规定具有怎样 Label 的 Pod 受到此 ReplicaSet 管理，即 Selector 字段定义了上文提到的 “集合” 。</li>
+<li><code>template</code>：即 Pod Template ，定义了当集合中 Pod 数量不足时，ReplicaSet 创建 Pod 应当使用的对象模板。</li>
+</ul>
+<h3 id="replicaset-status">ReplicaSet Status</h3>
+<ul>
+<li><code>replicas</code>：当前被 ReplicaSet 管理的 Pod 的数量。</li>
+<li><code>fullyLabeledReplicas</code>：当前被 ReplicaSet 管理的 Pod 中，具有与 Pod Template 完全相同的 Label 的 Pod 的数量。实际上被管理的 Pod 并不需要有与 Template 完全相同的 Label 也可能满足 Label Selector 的约束，这就是为什么这个字段的值可能与 replicas 不同。</li>
+<li><code>readyReplicas</code>：当前被 ReplicaSet 管理的 Pod 中处于 Ready 状态的 Pod 的数量。</li>
+<li><code>availableReplicas</code>：当前被 ReplicaSet 管理的 Pod 中被认为 Available 的 Pod 的数量。</li>
+<li><code>observedGeneration</code>：留给 Deployment Controller 使用，本文不涉及此字段。</li>
+<li><code>conditions</code>：ReplicaSet 在控制流程（Control Loop）中的状态。</li>
+</ul>
+<p>这里需要注意 “被管理” 、“处于 Ready 状态” 以及 “被认为 Available” 这几种表达方式之间的关系和细微不同：</p>
+<ul>
+<li><strong>Owned Pod</strong> ：被管理的 Pod（或 ReplicaSet 拥有的 Pod）即 ReplicaSet 中的 “Set” 中的 Pod 。当某个 Pod 与 Label Selector 相匹配它将立即被 ReplicaSet 接收，即被添加到集合中，当集合中的某个 Pod（通过修改 Label 等方式）不再匹配 Label Selector 它将立即被释放，即从集合中移出。某个 Pod 是否被另一个 ReplicaSet 的判断标准是它的 <code>ownerReference</code> 字段是否指向该 ReplicaSet。</li>
+</ul>
+<blockquote>
+<p>选自 <a href="https://kubernetes.io/zh/docs/concepts/workloads/controllers/garbage-collection/#owners-and-dependents">垃圾收集 - 属主和附属</a>：某些 Kubernetes 对象是其它一些对象的属主。例如，一个 ReplicaSet 是一组 Pod 的属主。具有属主的对象被称为是属主的附属 。每个附属对象具有一个指向其所属对象的 <code>metadata.ownerReferences</code> 字段。你也可以通过手动设置 <code>ownerReference</code> 的值，来指定属主和附属之间的关系。</p>
+</blockquote>
+<ul>
+<li><strong>Active Pod</strong> ：Active 并非是 Pod 生命周期中的某个阶段，而是 Controller 根据 Pod 的 Phase 自行判断得出的。当某个 Pod 的 Phase 并非 Succeed 或 Failed ，则认为它是 Active 的，见函数 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L923"><code>IsPodActive</code></a> 。虽然 Label Selector 定义了被 ReplicaSet 管理的合法 Pod 集合，但集合中所有 Active 的 Pod 才真正被 ReplicaSet 所管理，非 Active 的 Pod 即便符合 Label Selector 的定义也会被 ReplicaSet 忽略。</li>
+</ul>
+<blockquote>
+<p>关于 Pod 的状态和 Phase 之间的关系可参考 <a href="https://kubernetes.io/zh/docs/concepts/workloads/pods/pod-lifecycle/">Pod Lifecycle</a> 。</p>
+</blockquote>
+<ul>
+<li>
+<p><strong>Ready Pod</strong> ：Ready 为一个 Pod 现有的 Condition 之一，因此 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/api/pod/util.go#L224"><code>IsPodReady</code></a> 函数仅仅检查 Pod 是否处于该状态。当 Pod 中所有容器准备就绪后，即处于 Ready 状态。</p>
+</li>
+<li>
+<p><strong>Available Pod</strong> ：Available 也是由 Controller 自行判断得出的一个状态，当某 Pod 已处于 Ready 状态的时间超过 <code>minReadySeconds</code> ，则认为它是 Available 的。设定 Available 的概念主要就是用于在 Status 中展示当前 Available 的 Pod 数量，因此不要将它与其他状态混淆。</p>
+</li>
+</ul>
+<h2 id="replicaset-controller-实现细节">ReplicaSet Controller 实现细节</h2>
+<p>ReplicaSet Controller 的总体结构和各模块的职责与上面我们介绍的 Controller 一般结构类似，只是多出了 Expectations 模块。因此我们在这一小节中直接分为初始化和启动流程、Event Handlers 、Workers 和 Expectations 四部分来介绍具体的实现细节。</p>
+<h3 id="初始化和启动">初始化和启动</h3>
+<p>构造函数 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L112">NewReplicaSetController</a> 只是传递参数和初始化日志，其内部调用了 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L129">NewBaseController</a> 是 ReplicaSet Controller 真正的构造函数。初始化分为三部分：</p>
+<p>首先，初始化 <code>ReplicaSetController</code> 实例，包括将输入的 Client（<code>podControl</code> 、<code>kubeClient</code> 都是 Client-go 中 Interface 提供的调用 API Server 的接口，即对 REST API 的封装）传递给 Controller 、设置 <code>burstReplicas</code> 参数（该参数是控制平台启动时设置给 Controller Manager 的，Controller Manager 在初始化 Controller 时将启动参数传入）、初始两个内部模块 <code>expectations</code> 及 <code>queue</code> 。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">rsc <span style="color:#ff79c6">:=</span> <span style="color:#ff79c6">&amp;</span>ReplicaSetController{
+	GroupVersionKind: gvk,
+	kubeClient:       kubeClient,
+	podControl:       podControl,
+	burstReplicas:    burstReplicas,
+	expectations:     controller.<span style="color:#50fa7b">NewUIDTrackingControllerExpectations</span>(controller.<span style="color:#50fa7b">NewControllerExpectations</span>()),
+	queue:            workqueue.<span style="color:#50fa7b">NewNamedRateLimitingQueue</span>(workqueue.<span style="color:#50fa7b">DefaultControllerRateLimiter</span>(), queueName),
+}
+</code></pre></div><p>第二，为 Informer 注册 Event Handler 。通过上文我们知道 Event Handler 即数据库中更改事件的回调函数。ReplicaSet Controller 使用了两个 Informer 监控 ReplicaSet 和 Pod 这两种资源。可以看到每个 EventHandler 提供了 <code>AddFunc</code> 、<code>UpdateFunc</code> 和 <code>DeleteFunc</code> 这三个事件。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">rsInformer.<span style="color:#50fa7b">Informer</span>().<span style="color:#50fa7b">AddEventHandler</span>(cache.ResourceEventHandlerFuncs{
+	AddFunc:    rsc.addRS,
+	UpdateFunc: rsc.updateRS,
+	DeleteFunc: rsc.deleteRS,
+})
+
+podInformer.<span style="color:#50fa7b">Informer</span>().<span style="color:#50fa7b">AddEventHandler</span>(cache.ResourceEventHandlerFuncs{
+	AddFunc: rsc.addPod,
+	<span style="color:#6272a4">// This invokes the ReplicaSet for every pod change, eg: host assignment. Though this might seem like
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// overkill the most frequent pod update is status, and the associated ReplicaSet will only list from
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// local storage, so it should be ok.
+</span><span style="color:#6272a4"></span>	UpdateFunc: rsc.updatePod,
+	DeleteFunc: rsc.deletePod,
+})
+</code></pre></div><p>第三，从 Informer 中获取 Lister 和表示 Lister 是否同步完成的函数，仅仅是记录在成员中便于使用。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">rsc.rsLister = rsInformer.<span style="color:#50fa7b">Lister</span>()
+rsc.rsListerSynced = rsInformer.<span style="color:#50fa7b">Informer</span>().HasSynced
+
+rsc.podLister = podInformer.<span style="color:#50fa7b">Lister</span>()
+rsc.podListerSynced = podInformer.<span style="color:#50fa7b">Informer</span>().HasSynced
+</code></pre></div><p>Controller Manager 在启动时会在单独的 Go Routine 调用 Controller 的 <code>Run</code> 方法：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">Run</span>(workers <span style="color:#8be9fd">int</span>, stopCh <span style="color:#ff79c6">&lt;-</span><span style="color:#8be9fd;font-style:italic">chan</span> <span style="color:#8be9fd;font-style:italic">struct</span>{}) {
+	<span style="color:#ff79c6">defer</span> utilruntime.<span style="color:#50fa7b">HandleCrash</span>()
+	<span style="color:#ff79c6">defer</span> rsc.queue.<span style="color:#50fa7b">ShutDown</span>()
+
+	controllerName <span style="color:#ff79c6">:=</span> strings.<span style="color:#50fa7b">ToLower</span>(rsc.Kind)
+	klog.<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Starting %v controller&#34;</span>, controllerName)
+	<span style="color:#ff79c6">defer</span> klog.<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Shutting down %v controller&#34;</span>, controllerName)
+</code></pre></div><p><code>Run</code> 的逻辑也比较简单，首先等待 Informer 中的 Local Cache 首次与 ETCD 同步完成：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	<span style="color:#ff79c6">if</span> !cache.<span style="color:#50fa7b">WaitForNamedCacheSync</span>(rsc.Kind, stopCh, rsc.podListerSynced, rsc.rsListerSynced) {
+		<span style="color:#ff79c6">return</span>
+	}
+</code></pre></div><p>接着使用 <code>wait.Until</code> 每秒创建一定数量的 <code>worker</code> 处理 Work Queue 中的对象索引。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	<span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">:=</span> <span style="color:#bd93f9">0</span>; i &lt; workers; i<span style="color:#ff79c6">++</span> {
+		<span style="color:#ff79c6">go</span> wait.<span style="color:#50fa7b">Until</span>(rsc.worker, time.Second, stopCh)
+	}
+
+	<span style="color:#ff79c6">&lt;-</span>stopCh
+}
+</code></pre></div><h3 id="event-handlers">Event Handlers</h3>
+<p>Event Handler 是将 Edge Driven 转化为 Level Driven 的关键，也是触发 Worker 中的 Control Loop 完成 “Check this X” 的关键。这些 Control Loop 何时针对哪个 ReplicaSet 实例执行，取决于 Event Handler 何时将哪个 ReplicaSet 的 Key 放入工作队列，通过这种方式 Event Handler 将某个 Worker “唤醒” 开始针对目标 ReplicaSet 进行控制，也可理解为 Event Handler 将被放入队列的 ReplicaSet “唤醒” 以进行其控制工作。</p>
+<h4 id="add-replicaset">Add ReplicaSet</h4>
+<p><a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L284"><code>addRS</code></a> 在有 ReplicaSet 被创建（Informer 发现从前未出现过的 ReplicaSet）时被调用。它仅仅输出了日志并将被创建的 ReplicaSet 的 Key 直接加入队列，因为新出现的 ReplicaSet 显然有可能处于非期望状态。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">addRS</span>(obj <span style="color:#8be9fd;font-style:italic">interface</span>{}) {
+	rs <span style="color:#ff79c6">:=</span> obj.(<span style="color:#ff79c6">*</span>apps.ReplicaSet)
+	klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Adding %s %s/%s&#34;</span>, rsc.Kind, rs.Namespace, rs.Name)
+	rsc.<span style="color:#50fa7b">enqueueRS</span>(rs)
+}
+</code></pre></div><h4 id="update-replicaset">Update ReplicaSet</h4>
+<p>修改 ReplicaSet 的许多字段都会导致这个对象变得需要被处理，如改变 Label Selector 使其管理不同的 Pod 集合、改变 Replicas 使其现有的 Pod 数量不再满足期望等。 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L291"><code>updateRS</code></a> 可能在几种情况下被调用：</p>
+<ol>
+<li>某 ReplicaSet 被使用 Update 或 Patch 方法更改，触发 Update 事件；</li>
+<li>在 Periodic Resync 的过程中，所有 ReplicaSet 都会被触发 Update 事件；</li>
+<li>某个旧 ReplicaSet 被删除（删除之前可能被进行若干次修改），后一个新的有同样 Namespaced Name 的 ReplicaSet 被创建出来，如果删除事件被 Informer 错失的话，它是无法区分新旧 ReplicaSet 的，因此它认为发生了一次 Update；</li>
+</ol>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">updateRS</span>(old, cur <span style="color:#8be9fd;font-style:italic">interface</span>{}) {
+	oldRS <span style="color:#ff79c6">:=</span> old.(<span style="color:#ff79c6">*</span>apps.ReplicaSet)
+	curRS <span style="color:#ff79c6">:=</span> cur.(<span style="color:#ff79c6">*</span>apps.ReplicaSet)
+</code></pre></div><p>首先处理第三种情况，通过检查每个 Object 唯一的 <a href="https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids">UID</a> 就可判断出 <code>oldRS</code> 和 <code>curRS</code> 是不是同一个对象。对于这种情况，产生一个 <code>DeletedFinalStateUnknown</code> 给删除事件的回调 <code>deleteRS</code> 。前文已经提到过，<code>DeletedFinalStateUnknown</code> 用于表示某个 Object 被删除了，但被删除时的最后状态未知。</p>
+<blockquote>
+<p>Every object created over the whole lifetime of a Kubernetes cluster has a distinct UID. It is intended to distinguish between historical occurrences of similar entities.</p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	<span style="color:#6272a4">// TODO: make a KEP and fix informers to always call the delete event handler on re-create
+</span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">if</span> curRS.UID <span style="color:#ff79c6">!=</span> oldRS.UID {
+		key, err <span style="color:#ff79c6">:=</span> controller.<span style="color:#50fa7b">KeyFunc</span>(oldRS)
+		<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+			utilruntime.<span style="color:#50fa7b">HandleError</span>(fmt.<span style="color:#50fa7b">Errorf</span>(<span style="color:#f1fa8c">&#34;couldn&#39;t get key for object %#v: %v&#34;</span>, oldRS, err))
+			<span style="color:#ff79c6">return</span>
+		}
+		rsc.<span style="color:#50fa7b">deleteRS</span>(cache.DeletedFinalStateUnknown{
+			Key: key,
+			Obj: oldRS,
+		})
+	}
+</code></pre></div><p>直接将新的 ReplicaSet 的 Key 进队，这里 “新的” Key 的说法其实只适用于第三种情况，其他情况 Key 应当是不变的。情况一和情况二中 ReplicaSet 都会被直接进队，这里的注释也就是在解释为什么没有过滤掉情况二那些实际上没发生改变但是被触发的 ReplicaSet ，大意就是每隔一段时间就让所有 ReplicaSet 进队一次是更安全的选择，可以防止由于创建或删除 Pod 失败导致对应的 ReplicaSet 的 Update 永远不会被任何事触发（ReplicaSet 创建或删除 Pod 的过程不是阻塞的，稍后我们会提到），且有许多机制例如 Expectations 可以降低这种大量入队处理的开销。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	<span style="color:#6272a4">// You might imagine that we only really need to enqueue the
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// replica set when Spec changes, but it is safer to sync any
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// time this function is triggered. That way a full informer
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// resync can requeue any replica set that don&#39;t yet have pods
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// but whose last attempts at creating a pod have failed (since
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// we don&#39;t block on creation of pods) instead of those
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// replica sets stalling indefinitely. Enqueueing every time
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// does result in some spurious syncs (like when Status.Replica
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// is updated and the watch notification from it retriggers
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// this function), but in general extra resyncs shouldn&#39;t be
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// that bad as ReplicaSets that haven&#39;t met expectations yet won&#39;t
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// sync, and all the listing is done using local stores.
+</span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">*</span>(oldRS.Spec.Replicas) <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">*</span>(curRS.Spec.Replicas) {
+		klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;%v %v updated. Desired pod count change: %d-&gt;%d&#34;</span>, rsc.Kind, curRS.Name, <span style="color:#ff79c6">*</span>(oldRS.Spec.Replicas), <span style="color:#ff79c6">*</span>(curRS.Spec.Replicas))
+	}
+	rsc.<span style="color:#50fa7b">enqueueRS</span>(curRS)
+}
+</code></pre></div><h4 id="delete-replicaset">Delete ReplicaSet</h4>
+<p><a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L326"><code>deleteRS</code></a> 的触发有两种情况，即 API Server 告知 Informer 有 Object 被删除或 Informer 自行产生的 <code>DeletedFinalStateUnknown</code> 。这里只是简单的对参数的类型进行了判断，如果传入的 <code>obj</code> 是一个 <code>DeletedFinalStateUnknown</code> 那么从中取出真正的 ReplicaSet 进行后面的处理。实际上处理也仅仅是将对应的 ReplicaSet 唤醒。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">deleteRS</span>(obj <span style="color:#8be9fd;font-style:italic">interface</span>{}) {
+	rs, ok <span style="color:#ff79c6">:=</span> obj.(<span style="color:#ff79c6">*</span>apps.ReplicaSet)
+	<span style="color:#ff79c6">if</span> !ok {
+		tombstone, ok <span style="color:#ff79c6">:=</span> obj.(cache.DeletedFinalStateUnknown)
+		<span style="color:#ff79c6">if</span> !ok {
+			utilruntime.<span style="color:#50fa7b">HandleError</span>(fmt.<span style="color:#50fa7b">Errorf</span>(<span style="color:#f1fa8c">&#34;couldn&#39;t get object from tombstone %#v&#34;</span>, obj))
+			<span style="color:#ff79c6">return</span>
+		}
+		rs, ok = tombstone.Obj.(<span style="color:#ff79c6">*</span>apps.ReplicaSet)
+		<span style="color:#ff79c6">if</span> !ok {
+			utilruntime.<span style="color:#50fa7b">HandleError</span>(fmt.<span style="color:#50fa7b">Errorf</span>(<span style="color:#f1fa8c">&#34;tombstone contained object that is not a ReplicaSet %#v&#34;</span>, obj))
+			<span style="color:#ff79c6">return</span>
+		}
+	}
+
+	key, err <span style="color:#ff79c6">:=</span> controller.<span style="color:#50fa7b">KeyFunc</span>(rs)
+	<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		utilruntime.<span style="color:#50fa7b">HandleError</span>(fmt.<span style="color:#50fa7b">Errorf</span>(<span style="color:#f1fa8c">&#34;couldn&#39;t get key for object %#v: %v&#34;</span>, rs, err))
+		<span style="color:#ff79c6">return</span>
+	}
+
+	klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Deleting %s %q&#34;</span>, rsc.Kind, key)
+
+	<span style="color:#6272a4">// Delete expectations for the ReplicaSet so if we create a new one with the same name it starts clean
+</span><span style="color:#6272a4"></span>	rsc.expectations.<span style="color:#50fa7b">DeleteExpectations</span>(key)
+
+	rsc.queue.<span style="color:#50fa7b">Add</span>(key)
+}
+</code></pre></div><p>值得注意的是这里第一次出现了 Expectations 的概念，我们暂时忽略这些对于 Expectations 的调用，在 Control Loop 中再来讨论它的作用。</p>
+<h4 id="add-pod">Add Pod</h4>
+<p>对于 Pod 的创建、删除和修改可能带来什么？当一个 Pod 被创建或删除，如果它属于某一个 ReplicaSet 的管辖，那么该 ReplicaSet 就会因为 Pod 数量发生改变而偏离期望状态。当某个 Pod 自身被修改，它可能会由于 Label 的改变而离开原本的 ReplicaSet 而被新的 ReplicaSet 管理，也可能会因为状态的变更（原本 Active 的 Pod 不再 Active 等）而导致它所在的 ReplicaSet 偏离期望状态。</p>
+<p><a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L356"><code>addPod</code></a> 会在某个新 Pod 出现在 ETCD 中时被调用，此时</p>
+<ol>
+<li>要么 Pod 被 Controller 中的某个 Worker 创建成功，那么该 Pod 应该原本具有一个指向某 ReplicaSet 的 Owner Reference 。（在 Kubernetes 源码中许多表示 Owner Reference 的函数和变量被命名为 Controller Reference ，但这种名称容易与 Controller 混淆而造成迷惑，所以统一称为 Owner Reference）</li>
+<li>要么 Pod 被第三方（用户或其他 Controller）创建，那么该 Pod 可能没有 Owner ，也可能属于某个 ReplicaSet 或属于某个其他类型的 Object 。</li>
+<li>要么 Pod 并非刚刚被创建，只是刚刚被 Informer “发现” ，这可能由于许多原因，例如 Controller 刚刚被启动或若干事件被 Watch 错失。此时 Pod 可能处于生命周期的任何阶段。</li>
+</ol>
+<p>对于已经被设置 Owner Reference 的 Pod ，除了其 Owner 本身外其他 ReplicaSet 即便拥有匹配的 Label Selector 也不会将其纳入管理，直到 Pod 被 Owner 释放即 Owner Reference 被清除后其他 ReplicaSet 才应当考虑接受并开始管理该 Pod 。因此对于这些 Pod ，<code>addPod</code> 仅将它们 Owner Reference 记录的 ReplicaSet（如果它的 Owner 并非 ReplicaSet ，则直接退出）唤醒，如果该 Pod 不再匹配原有 Owner 的 Label Selector ，那么它自然会被 Control Loop 释放。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	<span style="color:#6272a4">// If it has a ControllerRef, that&#39;s all that matters.
+</span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">if</span> controllerRef <span style="color:#ff79c6">:=</span> metav1.<span style="color:#50fa7b">GetControllerOf</span>(pod); controllerRef <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		rs <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">resolveControllerRef</span>(pod.Namespace, controllerRef)
+		<span style="color:#ff79c6">if</span> rs <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">nil</span> {
+			<span style="color:#ff79c6">return</span>
+		}
+		rsKey, err <span style="color:#ff79c6">:=</span> controller.<span style="color:#50fa7b">KeyFunc</span>(rs)
+		<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+			<span style="color:#ff79c6">return</span>
+		}
+		klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Pod %s created: %#v.&#34;</span>, pod.Name, pod)
+		rsc.expectations.<span style="color:#50fa7b">CreationObserved</span>(rsKey)
+		rsc.queue.<span style="color:#50fa7b">Add</span>(rsKey)
+		<span style="color:#ff79c6">return</span>
+	}
+</code></pre></div><p>对于没有 Owner 的 Pod ，<code>addPod</code> 会将同一命名空间中，所有 ReplicaSet 中具备与当前 Pod 匹配的 Label Selector 的 ReplicaSet 全部唤醒。道理上看它们都应当管理该 Pod ，但每个 Pod 不能由多个 ReplicaSet 同时管理，具体由哪个 ReplicaSet 接收实际上是随机的，取决于哪个 ReplicaSet 的 Key 会先被 Worker 取出并抢先设置 Owner Reference 。另外，ReplicaSet 只可能管理同一命名空间中的 Pod 这一规则在这里得以体现。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	<span style="color:#6272a4">// Otherwise, it&#39;s an orphan. Get a list of all matching ReplicaSets and sync
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// them to see if anyone wants to adopt it.
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// DO NOT observe creation because no controller should be waiting for an
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// orphan.
+</span><span style="color:#6272a4"></span>	rss <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">getPodReplicaSets</span>(pod)
+	<span style="color:#ff79c6">if</span> <span style="color:#8be9fd;font-style:italic">len</span>(rss) <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">0</span> {
+		<span style="color:#ff79c6">return</span>
+	}
+	klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Orphan Pod %s created: %#v.&#34;</span>, pod.Name, pod)
+	<span style="color:#ff79c6">for</span> _, rs <span style="color:#ff79c6">:=</span> <span style="color:#ff79c6">range</span> rss {
+		rsc.<span style="color:#50fa7b">enqueueRS</span>(rs)
+	}
+</code></pre></div><h4 id="update-pod">Update Pod</h4>
+<p><a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L403"><code>updatePod</code></a> 的核心问题在于如何处理 Label 和 Owner Reference 的 “组合变更” ，这两个字段都允许被外部更改，因此必须对这种复杂的情况加以分析。不过在此之前，它首先过滤掉了 Periodical Resync 产生的大量事件，通过判断 <code>ResourceVersion</code> 可以做到这一点，具体原因可参考 <a href="https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes">Efficient detection of changes</a> 。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">updatePod</span>(old, cur <span style="color:#8be9fd;font-style:italic">interface</span>{}) {
+	curPod <span style="color:#ff79c6">:=</span> cur.(<span style="color:#ff79c6">*</span>v1.Pod)
+	oldPod <span style="color:#ff79c6">:=</span> old.(<span style="color:#ff79c6">*</span>v1.Pod)
+	<span style="color:#ff79c6">if</span> curPod.ResourceVersion <span style="color:#ff79c6">==</span> oldPod.ResourceVersion {
+		<span style="color:#6272a4">// Periodic resync will send update events for all known pods.
+</span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// Two different versions of the same pod will always have different RVs.
+</span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">return</span>
+	}
+</code></pre></div><blockquote>
+<p>ReplicaSet 的 Update Event Handler 没有过滤掉这些事件换取了更可靠的 Controller ，而 Pod 无需这样做，因为 Update Pod 的最终目的也是将 ReplicaSet 入队以表达 “Check this X” 之意，无需定期触发 Update Pod ，因为 Update ReplicaSet 也能起到相同的作用。</p>
+</blockquote>
+<p>对于 Label 和 Owner Reference 的处理思路是这样的：如果 Owner Reference 变化了，这可能表明 Pod 被从它旧的属主那里主动地释放或被动地剥夺了，我们无法区分这两种情况，必须唤醒旧的属主（假如有）以告知它这一事件。类似地，如果 Pod 被指定了一个新的属主，我们同样需要唤醒新属主，并且在这种情况下，Label 的不需要再被考虑，因为已有属主的 Pod 不会被其他 ReplicaSet 管理。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	curControllerRef <span style="color:#ff79c6">:=</span> metav1.<span style="color:#50fa7b">GetControllerOf</span>(curPod)
+	oldControllerRef <span style="color:#ff79c6">:=</span> metav1.<span style="color:#50fa7b">GetControllerOf</span>(oldPod)
+	controllerRefChanged <span style="color:#ff79c6">:=</span> !reflect.<span style="color:#50fa7b">DeepEqual</span>(curControllerRef, oldControllerRef)
+	<span style="color:#ff79c6">if</span> controllerRefChanged <span style="color:#ff79c6">&amp;&amp;</span> oldControllerRef <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		<span style="color:#6272a4">// The ControllerRef was changed. Sync the old controller, if any.
+</span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">if</span> rs <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">resolveControllerRef</span>(oldPod.Namespace, oldControllerRef); rs <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+			rsc.<span style="color:#50fa7b">enqueueRS</span>(rs)
+		}
+	}
+
+	<span style="color:#6272a4">// If it has a ControllerRef, that&#39;s all that matters.
+</span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">if</span> curControllerRef <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		rs <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">resolveControllerRef</span>(curPod.Namespace, curControllerRef)
+		<span style="color:#ff79c6">if</span> rs <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">nil</span> {
+			<span style="color:#ff79c6">return</span>
+		}
+		klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Pod %s updated, objectMeta %+v -&gt; %+v.&#34;</span>, curPod.Name, oldPod.ObjectMeta, curPod.ObjectMeta)
+		rsc.<span style="color:#50fa7b">enqueueRS</span>(rs)
+		<span style="color:#6272a4">// TODO: MinReadySeconds in the Pod will generate an Available condition to be added in
+</span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// the Pod status which in turn will trigger a requeue of the owning replica set thus
+</span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// having its status updated with the newly available replica. For now, we can fake the
+</span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// update by resyncing the controller MinReadySeconds after the it is requeued because
+</span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// a Pod transitioned to Ready.
+</span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// Note that this still suffers from #29229, we are just moving the problem one level
+</span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// &#34;closer&#34; to kubelet (from the deployment to the replica set controller).
+</span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">if</span> !podutil.<span style="color:#50fa7b">IsPodReady</span>(oldPod) <span style="color:#ff79c6">&amp;&amp;</span> podutil.<span style="color:#50fa7b">IsPodReady</span>(curPod) <span style="color:#ff79c6">&amp;&amp;</span> rs.Spec.MinReadySeconds &gt; <span style="color:#bd93f9">0</span> {
+			klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">2</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;%v %q will be enqueued after %ds for availability check&#34;</span>, rsc.Kind, rs.Name, rs.Spec.MinReadySeconds)
+			<span style="color:#6272a4">// Add a second to avoid milliseconds skew in AddAfter.
+</span><span style="color:#6272a4"></span>			<span style="color:#6272a4">// See https://github.com/kubernetes/kubernetes/issues/39785#issuecomment-279959133 for more info.
+</span><span style="color:#6272a4"></span>			rsc.<span style="color:#50fa7b">enqueueRSAfter</span>(rs, (time.<span style="color:#50fa7b">Duration</span>(rs.Spec.MinReadySeconds)<span style="color:#ff79c6">*</span>time.Second)<span style="color:#ff79c6">+</span>time.Second)
+		}
+		<span style="color:#ff79c6">return</span>
+	}
+</code></pre></div><p>若 Pod 没有被指定属主，我们需要考虑 Label 的变化，即像 <code>addPod</code> 中所作的一样唤醒所有可能作为属主的 ReplicaSet 。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	<span style="color:#6272a4">// Otherwise, it&#39;s an orphan. If anything changed, sync matching controllers
+</span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// to see if anyone wants to adopt it now.
+</span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">if</span> labelChanged <span style="color:#ff79c6">||</span> controllerRefChanged {
+		rss <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">getPodReplicaSets</span>(curPod)
+		<span style="color:#ff79c6">if</span> <span style="color:#8be9fd;font-style:italic">len</span>(rss) <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">0</span> {
+			<span style="color:#ff79c6">return</span>
+		}
+		klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Orphan Pod %s updated, objectMeta %+v -&gt; %+v.&#34;</span>, curPod.Name, oldPod.ObjectMeta, curPod.ObjectMeta)
+		<span style="color:#ff79c6">for</span> _, rs <span style="color:#ff79c6">:=</span> <span style="color:#ff79c6">range</span> rss {
+			rsc.<span style="color:#50fa7b">enqueueRS</span>(rs)
+		}
+	}
+</code></pre></div><p><a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L477"><code>deletePod</code></a> 的工作则是直接唤醒被删除的 Pod 的属主。考虑到 Event Handler 的大部分细节已在前面阐述，这里就不占用篇幅了。对于 Pod Event Handler ，只需注意 Pod 若已拥有 Owner ，必须先将此 Owner 唤醒，结合其详细的注释就比较好理解了。</p>
+<h3 id="worker">Worker</h3>
+<p>Worker 并行运行 Control Loop 。启动方法 <code>Run</code> 中每隔一秒会创建出一些运行 <code>worker</code> 函数的 Go Routine ，证明它们并不是一些长期运行的 Routine ，不然也不会需要频繁创建。的确如此，<a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L518"><code>worker</code></a> 只有三行：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#6272a4">// worker runs a worker thread that just dequeues items, processes them, and marks them done.
+</span><span style="color:#6272a4">// It enforces that the syncHandler is never invoked concurrently with the same key.
+</span><span style="color:#6272a4"></span><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">worker</span>() {
+	<span style="color:#ff79c6">for</span> rsc.<span style="color:#50fa7b">processNextWorkItem</span>() {
+	}
+}
+</code></pre></div><h4 id="process-next-work-item">Process Next Work Item</h4>
+<p>看上去当 <code>processNextWorkItem</code> 返回 <code>false</code> 时 <code>worker</code> 就会退出，那么 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L523"><code>processNextWorkItem</code></a> 就应当是从 Work Queue 中取出单个 Item 并处理的逻辑：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">processNextWorkItem</span>() <span style="color:#8be9fd">bool</span> {
+	key, quit <span style="color:#ff79c6">:=</span> rsc.queue.<span style="color:#50fa7b">Get</span>()
+	<span style="color:#ff79c6">if</span> quit {
+		<span style="color:#ff79c6">return</span> <span style="color:#ff79c6">false</span>
+	}
+	<span style="color:#ff79c6">defer</span> rsc.queue.<span style="color:#50fa7b">Done</span>(key)
+
+	err <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">syncHandler</span>(key.(<span style="color:#8be9fd">string</span>))
+	<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">nil</span> {
+		rsc.queue.<span style="color:#50fa7b">Forget</span>(key)
+		<span style="color:#ff79c6">return</span> <span style="color:#ff79c6">true</span>
+	}
+
+	utilruntime.<span style="color:#50fa7b">HandleError</span>(fmt.<span style="color:#50fa7b">Errorf</span>(<span style="color:#f1fa8c">&#34;sync %q failed with %v&#34;</span>, key, err))
+	rsc.queue.<span style="color:#50fa7b">AddRateLimited</span>(key)
+
+	<span style="color:#ff79c6">return</span> <span style="color:#ff79c6">true</span>
+}
+</code></pre></div><p>为了让这段代码变得清晰这里稍微解释一下 <code>queue</code> 的接口：</p>
+<ul>
+<li><code>Get</code> 自然是从 Queue 中 Pop 一个 Item ，该 Item 被取出的同时会在队列中标记为 “正在处理” ，如果队列为空会返回 <code>quit</code> 为真；</li>
+<li><code>Done</code> 表示告知队列某个 Item 已经成功处理完成；</li>
+<li><code>AddRateLimited</code> 和 <code>Forget</code> 是 <code>RateLimitedQueue</code> 所实现的 <code>RateLimitingInterface</code> 中的方法。<code>RateLimitedQueue</code> 可对元素的入队次数进行统计，并阻止某一元素次数过多，这里用来限制单个对象的重试次数。
+<ul>
+<li><code>AddRateLimited</code> 为在现有重试次数允许的情况下将 Item 加入队列，若 Item 已被重试过多次，则进队请求被直接忽略；</li>
+<li><code>Forget</code> 将对应 Item 的 重试次数清空，在 Item 处理成功后被调用；</li>
+</ul>
+</li>
+</ul>
+<p>因此 <code>processNextWorkItem</code> 仍是对 Control Loop 的一个封装：它获取一个新的 Item ，通过 <code>syncHandler</code> 对其进行处理，若处理过程中发生错误，则尝试将该 Item 重新加入队列进行重试，重试次数过多的对象将被忽略。只有队列为空时，<code>processNextWorkItem</code> 会返回 <code>false</code> 来终止 <code>worker</code> 。<code>syncHandler</code> 的逻辑则是真正的 Control Loop ，它其实是函数 <code>syncReplicaSet</code> 。</p>
+<h4 id="sync-replicaset">Sync ReplicaSet</h4>
+<p><a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L650"><code>syncReplicaSet</code></a> 即 Control Loop 。在每个 Loop 中，Controller 获取目标 ReplicaSet 的 Current State 和 Desired State ，并作出具体的行为完成 ReplicaSet 所承诺的功能。</p>
+<p>在函数的开始，根据本次 Control Loop 的目标 ReplicaSet 的 Key 从 Local Cache 中拿到目标 ReplicaSet 的最新 Object 。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#6272a4">// syncReplicaSet will sync the ReplicaSet with the given key if it has had its expectations fulfilled,
+</span><span style="color:#6272a4">// meaning it did not expect to see any more of its pods created or deleted. This function is not meant to be
+</span><span style="color:#6272a4">// invoked concurrently with the same key.
+</span><span style="color:#6272a4"></span><span style="color:#8be9fd;font-style:italic">func</span> (rsc <span style="color:#ff79c6">*</span>ReplicaSetController) <span style="color:#50fa7b">syncReplicaSet</span>(key <span style="color:#8be9fd">string</span>) <span style="color:#8be9fd">error</span> {
+	startTime <span style="color:#ff79c6">:=</span> time.<span style="color:#50fa7b">Now</span>()
+	<span style="color:#ff79c6">defer</span> <span style="color:#8be9fd;font-style:italic">func</span>() {
+		klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Finished syncing %v %q (%v)&#34;</span>, rsc.Kind, key, time.<span style="color:#50fa7b">Since</span>(startTime))
+	}()
+
+	namespace, name, err <span style="color:#ff79c6">:=</span> cache.<span style="color:#50fa7b">SplitMetaNamespaceKey</span>(key)
+	<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		<span style="color:#ff79c6">return</span> err
+	}
+	rs, err <span style="color:#ff79c6">:=</span> rsc.rsLister.<span style="color:#50fa7b">ReplicaSets</span>(namespace).<span style="color:#50fa7b">Get</span>(name)
+	<span style="color:#ff79c6">if</span> errors.<span style="color:#50fa7b">IsNotFound</span>(err) {
+		klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;%v %v has been deleted&#34;</span>, rsc.Kind, key)
+		rsc.expectations.<span style="color:#50fa7b">DeleteExpectations</span>(key)
+		<span style="color:#ff79c6">return</span> <span style="color:#ff79c6">nil</span>
+	}
+	<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		<span style="color:#ff79c6">return</span> err
+	}
+</code></pre></div><blockquote>
+<p>Control Loop 总是在开始时读取目标 Object 的一切 “最新” 状态，这是因为 Control Loop 必须保证其 Edge Driven 特性，也就是说当某些 ReplicaSet 对象被入队，那可能是由于某个原本属于它的 Pod 被删除或它本身的 Label Selector 被更改等，但这些对 Control Loop 是透明的，Control Loop 必须通过获取对象现有状态，观察现有状态与期望状态的差异来决定自己的行为。这也解释了为什么 Work Queue 中仅仅存储 Object Key 而不包含其他信息，以及为什么需要维护 Local Cache 来避免 Control Loop 大量的状态读取给 API Server 造成负担（尽管如此，在某些需要获取最最最新对象状态的场景下还是需要单独从 API Server 进行请求的，Local Cache 与 ETCD 会有一些不同步）。</p>
+</blockquote>
+<p>按照 Control Loop 的职责，我们需要获取目标 ReplicaSet 的当前状态和期望状态。什么叫做一个 ReplicaSet 的当前状态和期望状态？这是根据该 Object 所承诺的功能决定的：</p>
+<h5 id="维护正确的-pod-集合">维护正确的 Pod 集合</h5>
+<p>首先，ReplicaSet 总会按照设定给它的 Label Selector 来接收或释放 Pod ，即正确设定相关 Pod 的 Owner Reference ，且当前被管理的各种类型的 Pod 数量总会被正确设定到 Status 中的字段上；<b>此时，一个 ReplicaSet 当前状态与期望状态之间的差异体现在由 Label Selector 定义的应当被它管理的 Pod 集合与实际上拥有指向它的 Owner Reference 的 Pod 集合的差异。</b>因此 Controller 从 Local Cache 中得到一份处于相同 Namespace 的全部 Pod 的列表，并从中筛选出目标 ReplicaSet 应当管理的 Pod 集合。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">selector, err <span style="color:#ff79c6">:=</span> metav1.<span style="color:#50fa7b">LabelSelectorAsSelector</span>(rs.Spec.Selector)
+<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+	utilruntime.<span style="color:#50fa7b">HandleError</span>(fmt.<span style="color:#50fa7b">Errorf</span>(<span style="color:#f1fa8c">&#34;error converting pod selector to selector: %v&#34;</span>, err))
+	<span style="color:#ff79c6">return</span> <span style="color:#ff79c6">nil</span>
+}
+
+<span style="color:#6272a4">// list all pods to include the pods that don&#39;t match the rs`s selector
+</span><span style="color:#6272a4">// anymore but has the stale controller ref.
+</span><span style="color:#6272a4">// TODO: Do the List and Filter in a single pass, or use an index.
+</span><span style="color:#6272a4"></span>allPods, err <span style="color:#ff79c6">:=</span> rsc.podLister.<span style="color:#50fa7b">Pods</span>(rs.Namespace).<span style="color:#50fa7b">List</span>(labels.<span style="color:#50fa7b">Everything</span>())
+<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+	<span style="color:#ff79c6">return</span> err
+}
+<span style="color:#6272a4">// Ignore inactive pods.
+</span><span style="color:#6272a4"></span>filteredPods <span style="color:#ff79c6">:=</span> controller.<span style="color:#50fa7b">FilterActivePods</span>(allPods)
+</code></pre></div><p>使用 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L717"><code>claimPods</code></a>（内部其实使用了 <code>PodControllerRefManager</code> ，具体的实现还是比较易懂的）即可纠正现有集合：对于不该被管理的 Pod 清除 Owner Reference ，对于该管理但未管理的 Pod 添加 Owner Reference 即可。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#6272a4">// NOTE: filteredPods are pointing to objects from cache - if you need to
+</span><span style="color:#6272a4">// modify them, you need to copy it first.
+</span><span style="color:#6272a4"></span>filteredPods, err = rsc.<span style="color:#50fa7b">claimPods</span>(rs, selector, filteredPods)
+<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+	<span style="color:#ff79c6">return</span> err
+}
+</code></pre></div><h5 id="保证-pod-集合的大小">保证 Pod 集合的大小</h5>
+<p>其次，ReplicaSet 总会创建或删除 Pod 保证被管理的 Pod 总数等于 Replicas（尽管创建或删除之前或过程中 Pod 数量可能暂时地不满足期望，我们都知道不可能做到 Pod 数量恒定于期望值）；<b>此时，一个 ReplicaSet 当前状态与期望状态之间的差异体现在被它管理的 Pod 数量与 Replicas 之间的差异。</b></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">var</span> manageReplicasErr <span style="color:#8be9fd">error</span>
+<span style="color:#ff79c6">if</span> rsNeedsSync <span style="color:#ff79c6">&amp;&amp;</span> rs.DeletionTimestamp <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">nil</span> {
+	manageReplicasErr = rsc.<span style="color:#50fa7b">manageReplicas</span>(filteredPods, rs)
+}
+</code></pre></div><p><a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L545"><code>manageReplicas</code></a> 用于处理这种差异。但在此之前，注意到 <code>rsNeedsSync</code> 控制了是否调用 <code>manageReplicas</code> ，这是一个与 Expectations 模块有关的标志，在此我们仅知道它控制了是否对 Pod 数量进行调整，在后文中介绍 Expectations 时再加以解释。</p>
+<p><code>manageReplicas</code> 对 Pod 数量与期望之间的偏差进行计算：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">	diff <span style="color:#ff79c6">:=</span> <span style="color:#8be9fd;font-style:italic">len</span>(filteredPods) <span style="color:#ff79c6">-</span> <span style="color:#8be9fd;font-style:italic">int</span>(<span style="color:#ff79c6">*</span>(rs.Spec.Replicas))
+</code></pre></div><p>当 <code>diff</code> 为负数时代表被管理的 Pod 数量不足，需要创建新 Pod 。首先，单次 Control Loop 中创建和删除 Pod 的真实数量都需要由参数 <code>burstReplicas</code> 限制，该参数为 Controller 的启动参数，是初始化 Controller 时传入的。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#ff79c6">if</span> diff &lt; <span style="color:#bd93f9">0</span> {
+	diff <span style="color:#ff79c6">*=</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>
+	<span style="color:#ff79c6">if</span> diff &gt; rsc.burstReplicas {
+		diff = rsc.burstReplicas
+	}
+</code></pre></div><p>接着，Controller 使用一种称作批量启动（Batch Start）的方法创建一定数量的 Pod 。批量启动根据 Pod Template 并行创建大量相同的 Pod ，它将需要被创建的 Pod 数量分为若干个 Batch ，这些 Batch 中包含的 Pod 数量由小到大各不相同，由 <code>SlowStartInitialBatchSize</code> 控制最小的 Batch 的大小，而后 Batch 大小逐个倍增。在创建 Pod 时，Controller 按照由小到大的顺序串行创建每个 Batch ，而单个 Batch 之内是并行创建的。Batch Start 本质上是先使用小的 Batch 尝试创建 Pod 这一行为是否会出错，当某个 Batch 创建出错时，Controller 会取消后面更大 Batch 的创建，这样做的好处即避免了大量并行创建 Pod 的请求同时出错，而导致大量请求夹杂着错误信息淹没 API Server 。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#6272a4">// Batch the pod creates. Batch sizes start at SlowStartInitialBatchSize
+</span><span style="color:#6272a4">// and double with each successful iteration in a kind of &#34;slow start&#34;.
+</span><span style="color:#6272a4">// This handles attempts to start large numbers of pods that would
+</span><span style="color:#6272a4">// likely all fail with the same error. For example a project with a
+</span><span style="color:#6272a4">// low quota that attempts to create a large number of pods will be
+</span><span style="color:#6272a4">// prevented from spamming the API service with the pod create requests
+</span><span style="color:#6272a4">// after one of its pods fails.  Conveniently, this also prevents the
+</span><span style="color:#6272a4">// event spam that those failures would generate.
+</span><span style="color:#6272a4"></span>successfulCreations, err <span style="color:#ff79c6">:=</span> <span style="color:#50fa7b">slowStartBatch</span>(diff, controller.SlowStartInitialBatchSize, <span style="color:#8be9fd;font-style:italic">func</span>() <span style="color:#8be9fd">error</span> {
+	err <span style="color:#ff79c6">:=</span> rsc.podControl.<span style="color:#50fa7b">CreatePodsWithControllerRef</span>(rs.Namespace, <span style="color:#ff79c6">&amp;</span>rs.Spec.Template, rs, metav1.<span style="color:#50fa7b">NewControllerRef</span>(rs, rsc.GroupVersionKind))
+	<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		<span style="color:#ff79c6">if</span> errors.<span style="color:#50fa7b">HasStatusCause</span>(err, v1.NamespaceTerminatingCause) {
+			<span style="color:#6272a4">// if the namespace is being terminated, we don&#39;t have to do
+</span><span style="color:#6272a4"></span>			<span style="color:#6272a4">// anything because any creation will fail
+</span><span style="color:#6272a4"></span>			<span style="color:#ff79c6">return</span> <span style="color:#ff79c6">nil</span>
+		}
+	}
+	<span style="color:#ff79c6">return</span> err
+})
+</code></pre></div><p>对于 <code>diff</code> 为正的情况，Controller 需要在现有被管理 Pod 中删除一些，这个行为同样需要受到 <code>burstReplicas</code> 的限制。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">} <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> diff &gt; <span style="color:#bd93f9">0</span> {
+	<span style="color:#ff79c6">if</span> diff &gt; rsc.burstReplicas {
+		diff = rsc.burstReplicas
+	}
+</code></pre></div><p>通过 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L804"><code>getPodsToDelete</code></a> 方法，Controller 得以从被管理 Pod 中选出一些以在删除时造成较小的 “损失” 。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">relatedPods, err <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">getIndirectlyRelatedPods</span>(rs)
+utilruntime.<span style="color:#50fa7b">HandleError</span>(err)
+
+<span style="color:#6272a4">// Choose which Pods to delete, preferring those in earlier phases of startup.
+</span><span style="color:#6272a4"></span>podsToDelete <span style="color:#ff79c6">:=</span> <span style="color:#50fa7b">getPodsToDelete</span>(filteredPods, relatedPods, diff)
+</code></pre></div><p>通过阅读其中更深的代码，可以发现 <code>getPodsToDelete</code> 是通过对 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L815"><code>ActivePodsWithRanks</code></a> 进行排序，并取排序靠前的 Pod 。排序的比较关系为此处的 <a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L836"><code>Less</code></a> 方法。</p>
+<p>而后，通过开启多个 Go Routine 并行删除选定的 Pod 。</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#8be9fd;font-style:italic">var</span> wg sync.WaitGroup
+wg.<span style="color:#50fa7b">Add</span>(diff)
+<span style="color:#ff79c6">for</span> _, pod <span style="color:#ff79c6">:=</span> <span style="color:#ff79c6">range</span> podsToDelete {
+	<span style="color:#ff79c6">go</span> <span style="color:#8be9fd;font-style:italic">func</span>(targetPod <span style="color:#ff79c6">*</span>v1.Pod) {
+		<span style="color:#ff79c6">defer</span> wg.<span style="color:#50fa7b">Done</span>()
+		<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">:=</span> rsc.podControl.<span style="color:#50fa7b">DeletePod</span>(rs.Namespace, targetPod.Name, rs); err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+			<span style="color:#6272a4">// Decrement the expected number of deletes because the informer won&#39;t observe this deletion
+</span><span style="color:#6272a4"></span>			podKey <span style="color:#ff79c6">:=</span> controller.<span style="color:#50fa7b">PodKey</span>(targetPod)
+			rsc.expectations.<span style="color:#50fa7b">DeletionObserved</span>(rsKey, podKey)
+			<span style="color:#ff79c6">if</span> !apierrors.<span style="color:#50fa7b">IsNotFound</span>(err) {
+				klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">2</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Failed to delete %v, decremented expectations for %v %s/%s&#34;</span>, podKey, rsc.Kind, rs.Namespace, rs.Name)
+				errCh <span style="color:#ff79c6">&lt;-</span> err
+			}
+		}
+	}(pod)
+}
+wg.<span style="color:#50fa7b">Wait</span>()
+</code></pre></div><h3 id="expectations">Expectations</h3>
+<p>Expectations 模块被用于几乎所有需要删除或创建 Pod 的 Controller（ReplicaSet 、Jobs 、DeamonSet）中，来避免非阻塞式创建和删除 Pod 可能导致的重复操作问题。以创建 Pod 为例，典型的创建 Pod 过程：</p>
+<ol>
+<li>Controller 通过 Client-go 封装的 Client 向 API Server 发送请求创建 Pod ，然后并不等待其结果，继续进行其他工作（非阻塞的）；</li>
+<li>API Server 执行创建 Pod 流程并在 ETCD 中产生一个 Pod 对象；</li>
+<li>ETCD 中的创建事件会通过 Controller 中的 Pod Informer 与 API Server 之间的 Watch 连接被通知到 Pod Informer；</li>
+<li>Pod Informer 首先将这个新创建的 Pod 同步到自己的 Local Cache 中（在 Local Cache 中也创建一个相同的对象），然后调用 Event Handler 中的 <code>addPod</code> ；</li>
+</ol>
+<p>由于创建 Pod 的流程是非阻塞的，对于 Controller 来说，这一过程被成功执行的标志是一个对应的创建 Pod 事件最终唤醒 Event Handler 。当这一过程中出现错误，Controller 将无法得知，因此 Controller 通过设置超时来判断这些错误：当某些操作没有在一定时间内响应到 Event Handler ，则认为那些操作失败了。这里存在一个同步问题，即 Controller 必须保证每个 Control Loop 是同步的或串行的，在前一 Control Loop 的更改完成或失败以前，下一 Control Loop 不能采取任何行动，因为此时对象的状态并非它的最终状态，如果继续按照此状态进行决策则会产生重复的操作。</p>
+<blockquote>
+<p>假设对于一个期望为 5 个 Pod ，实际拥有 3 个 Pod 的 ReplicaSet ，Control Loop A 创建了 2 个 Pod 。但根据上面的描述，这两个 Pod 不可能立即被同步到 Local Cache 。在其最终因创建成功而被同步到 Local Cache 之前，Local Cache 中的 ReplicaSet 状态都将为 3 个 Pod 。此时若另一 Control Loop 被此 ReplicaSet 唤醒，它将再次发出请求创建 2 个 Pod ，这产生了错误的重复操作。因此，我们必须在这些创建和删除在执行时（被最终确认成功或失败之前）阻止其他 Control Loop 进行操作（实际上由于创建和删除 Pod 的非阻塞性，这种重复操作是完全有可能发生的，即便 Work Queue 可以保证不会有两个 Worker 同时处理同一 Object）。</p>
+</blockquote>
+<p>Expectations 是 Controller 维护的一个记录，它记录了对每个 ReplicaSet 的操作所处的状态。这样 Control Loop 在准备创建 Pod 后，它会找到对应的 ReplicaSet 在 Expectations 中的那条记录，然后在其中写道，“13:30 ，创建了 2 个 Pod” 。幸运的话这两个 Pod 会被成功创建，并且 Event Handler 中的 <code>addPod</code> 会被调用两次，那么只要在 <code>addPod</code> 中加入逻辑修改 Expectations 即可：比如当第一次调用时，Expectations 会被改成 “13:30 ，创建了 1 个 Pod”，而第二次调用时，这条记录将被清空。在此期间，如果 Control Loop 再次处理相同的 ReplicaSet 对象，那么它看到几秒钟前创建的 Pod 记录还留在 Expectations 中没有清除，便不会对这个对象做任何处理，因为这样是不明智的。但如果它看到 Expectations 中的记录已有十分钟之久，那么这次操作八成是失败了，它便会重新查看该对象的当前状态，并再次发出创建 Pod 请求。</p>
+<p>总结一下就是涉及 Expectations 的全部场景，以及其<a href="https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L144">每个方法</a>的作用了。Expectations 与 Local Cache 类似使用 Key（Namespaced Name）索引对象。在 Control Loop 要决定是否对某对象创建和删除 Pod 之前，首先要检查 Expectations 中是否有未遭到响应也未超时的记录，实际上 “记录” 本质上是时间戳和创建、删除 Pod 的数量：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">rsNeedsSync <span style="color:#ff79c6">:=</span> rsc.expectations.<span style="color:#50fa7b">SatisfiedExpectations</span>(key)
+<span style="color:#6272a4">// ...
+</span><span style="color:#6272a4"></span><span style="color:#ff79c6">if</span> rsNeedsSync <span style="color:#ff79c6">&amp;&amp;</span> rs.DeletionTimestamp <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">nil</span> {
+	manageReplicasErr = rsc.<span style="color:#50fa7b">manageReplicas</span>(filteredPods, rs)
+}
+</code></pre></div><p>在创建、删除后，应将这些操作更新到 Expectations 中：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">rsc.expectations.<span style="color:#50fa7b">ExpectCreations</span>(rsKey, diff)
+<span style="color:#6272a4">// ...
+</span><span style="color:#6272a4"></span>rsc.expectations.<span style="color:#50fa7b">ExpectDeletions</span>(rsKey, <span style="color:#50fa7b">getPodKeys</span>(podsToDelete))
+</code></pre></div><p>最后，在创建和删除操作最终被 <code>addPod</code> 、<code>deletePod</code> 捕获后，应减少 Expectations 中的值：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#6272a4">// addPod
+</span><span style="color:#6272a4">// If it has a ControllerRef, that&#39;s all that matters.
+</span><span style="color:#6272a4"></span><span style="color:#ff79c6">if</span> controllerRef <span style="color:#ff79c6">:=</span> metav1.<span style="color:#50fa7b">GetControllerOf</span>(pod); controllerRef <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+	rs <span style="color:#ff79c6">:=</span> rsc.<span style="color:#50fa7b">resolveControllerRef</span>(pod.Namespace, controllerRef)
+	<span style="color:#ff79c6">if</span> rs <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">nil</span> {
+		<span style="color:#ff79c6">return</span>
+	}
+	rsKey, err <span style="color:#ff79c6">:=</span> controller.<span style="color:#50fa7b">KeyFunc</span>(rs)
+	<span style="color:#ff79c6">if</span> err <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nil</span> {
+		<span style="color:#ff79c6">return</span>
+	}
+	klog.<span style="color:#50fa7b">V</span>(<span style="color:#bd93f9">4</span>).<span style="color:#50fa7b">Infof</span>(<span style="color:#f1fa8c">&#34;Pod %s created: %#v.&#34;</span>, pod.Name, pod)
+	rsc.expectations.<span style="color:#50fa7b">CreationObserved</span>(rsKey)
+	rsc.queue.<span style="color:#50fa7b">Add</span>(rsKey)
+	<span style="color:#ff79c6">return</span>
+}
+<span style="color:#6272a4">// ...
+</span><span style="color:#6272a4">// deletePod
+</span><span style="color:#6272a4"></span>rsc.expectations.<span style="color:#50fa7b">DeletionObserved</span>(rsKey, controller.<span style="color:#50fa7b">PodKey</span>(pod))
+</code></pre></div><h2 id="尾声">尾声</h2>
+<p>由于不可避免的惰性，并不是在学习过代码而是在其后很久才想到对自己的所学做一总结。其中涉及到源码我都尽量提供了在 <a href="https://github.com/kubernetes/kubernetes/tree/release-1.18">release-1.18</a> 分支上的引用以方便从宏观的角度、结合代码的上下文来阅读。ReplicaSet 的整体逻辑（当理解了 Controller 的一般结构后）实际上是比较简单的，尽管其中仍然有许多细节耐人寻味，发现这些细节背后的原因大概也是经过一段时间的沉淀后再作总结的一大好处吧。又是由于懒惰和时间安排的原因，本文只其中对其浅层的代码进行了罗列和举例，深入阅读其某些模块和方法的实现会有所帮助，但私以为本文以不小的篇幅已对其中思想的部分做了大量陈述，阅读上述其余部分的代码应当很快。希望本文繁杂的语句果真足以表达 Kubernetes 设计思想的优雅。</p>
+</div>
+  <footer class="post-footer">
+    <ul class="post-tags">
+      <li><a href="https://MilesChing.github.io/tags/kubernetes">Kubernetes</a></li>
+    </ul>
+<div class="share-buttons">
+    <a class="share-button-single" target="_blank" rel="noopener noreferrer"
+        aria-label="share Kubernetes Controller：从 ReplicaSet 开始 on twitter"
+        href="https://twitter.com/intent/tweet/?text=Kubernetes%20Controller%ef%bc%9a%e4%bb%8e%20ReplicaSet%20%e5%bc%80%e5%a7%8b&amp;url=https%3a%2f%2fMilesChing.github.io%2fposts%2fkubernetes%2freplicaset-src%2f">
+        <svg height="100%" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;"
+            version="1.1" viewBox="0 0 512 512" width="100%" xml:space="preserve">
+            <path
+                d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-253.927,424.544c135.939,0 210.268,-112.643 210.268,-210.268c0,-3.218 0,-6.437 -0.153,-9.502c14.406,-10.421 26.973,-23.448 36.935,-38.314c-13.18,5.824 -27.433,9.809 -42.452,11.648c15.326,-9.196 26.973,-23.602 32.49,-40.92c-14.252,8.429 -30.038,14.56 -46.896,17.931c-13.487,-14.406 -32.644,-23.295 -53.946,-23.295c-40.767,0 -73.87,33.104 -73.87,73.87c0,5.824 0.613,11.494 1.992,16.858c-61.456,-3.065 -115.862,-32.49 -152.337,-77.241c-6.284,10.881 -9.962,23.601 -9.962,37.088c0,25.594 13.027,48.276 32.95,61.456c-12.107,-0.307 -23.448,-3.678 -33.41,-9.196l0,0.92c0,35.862 25.441,65.594 59.311,72.49c-6.13,1.686 -12.72,2.606 -19.464,2.606c-4.751,0 -9.348,-0.46 -13.946,-1.38c9.349,29.426 36.628,50.728 68.965,51.341c-25.287,19.771 -57.164,31.571 -91.8,31.571c-5.977,0 -11.801,-0.306 -17.625,-1.073c32.337,21.15 71.264,33.41 112.95,33.41Z" />
+        </svg>
+    </a>
+    <a class="share-button-single" target="_blank" rel="noopener noreferrer"
+        aria-label="share Kubernetes Controller：从 ReplicaSet 开始 on linkedin"
+        href="https://www.linkedin.com/shareArticle?mini=true&amp;url=https%3a%2f%2fMilesChing.github.io%2fposts%2fkubernetes%2freplicaset-src%2f&amp;title=Kubernetes%20Controller%ef%bc%9a%e4%bb%8e%20ReplicaSet%20%e5%bc%80%e5%a7%8b&amp;summary=Kubernetes%20Controller%ef%bc%9a%e4%bb%8e%20ReplicaSet%20%e5%bc%80%e5%a7%8b&amp;source=https%3a%2f%2fMilesChing.github.io%2fposts%2fkubernetes%2freplicaset-src%2f">
+        <svg height="100%" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;"
+            version="1.1" viewBox="0 0 512 512" width="100%" xml:space="preserve">
+            <path
+                d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-288.985,423.278l0,-225.717l-75.04,0l0,225.717l75.04,0Zm270.539,0l0,-129.439c0,-69.333 -37.018,-101.586 -86.381,-101.586c-39.804,0 -57.634,21.891 -67.617,37.266l0,-31.958l-75.021,0c0.995,21.181 0,225.717 0,225.717l75.02,0l0,-126.056c0,-6.748 0.486,-13.492 2.474,-18.315c5.414,-13.475 17.767,-27.434 38.494,-27.434c27.135,0 38.007,20.707 38.007,51.037l0,120.768l75.024,0Zm-307.552,-334.556c-25.674,0 -42.448,16.879 -42.448,39.002c0,21.658 16.264,39.002 41.455,39.002l0.484,0c26.165,0 42.452,-17.344 42.452,-39.002c-0.485,-22.092 -16.241,-38.954 -41.943,-39.002Z" />
+        </svg>
+    </a>
+    <a class="share-button-single" target="_blank" rel="noopener noreferrer"
+        aria-label="share Kubernetes Controller：从 ReplicaSet 开始 on reddit"
+        href="https://reddit.com/submit?url=https%3a%2f%2fMilesChing.github.io%2fposts%2fkubernetes%2freplicaset-src%2f&title=Kubernetes%20Controller%ef%bc%9a%e4%bb%8e%20ReplicaSet%20%e5%bc%80%e5%a7%8b">
+        <svg height="100%" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;"
+            version="1.1" viewBox="0 0 512 512" width="100%" xml:space="preserve">
+            <path
+                d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-3.446,265.638c0,-22.964 -18.616,-41.58 -41.58,-41.58c-11.211,0 -21.361,4.457 -28.841,11.666c-28.424,-20.508 -67.586,-33.757 -111.204,-35.278l18.941,-89.121l61.884,13.157c0.756,15.734 13.642,28.29 29.56,28.29c16.407,0 29.706,-13.299 29.706,-29.701c0,-16.403 -13.299,-29.702 -29.706,-29.702c-11.666,0 -21.657,6.792 -26.515,16.578l-69.105,-14.69c-1.922,-0.418 -3.939,-0.042 -5.585,1.036c-1.658,1.073 -2.811,2.761 -3.224,4.686l-21.152,99.438c-44.258,1.228 -84.046,14.494 -112.837,35.232c-7.468,-7.164 -17.589,-11.591 -28.757,-11.591c-22.965,0 -41.585,18.616 -41.585,41.58c0,16.896 10.095,31.41 24.568,37.918c-0.639,4.135 -0.99,8.328 -0.99,12.576c0,63.977 74.469,115.836 166.33,115.836c91.861,0 166.334,-51.859 166.334,-115.836c0,-4.218 -0.347,-8.387 -0.977,-12.493c14.564,-6.47 24.735,-21.034 24.735,-38.001Zm-119.474,108.193c-20.27,20.241 -59.115,21.816 -70.534,21.816c-11.428,0 -50.277,-1.575 -70.522,-21.82c-3.007,-3.008 -3.007,-7.882 0,-10.889c3.003,-2.999 7.882,-3.003 10.885,0c12.777,12.781 40.11,17.317 59.637,17.317c19.522,0 46.86,-4.536 59.657,-17.321c3.016,-2.999 7.886,-2.995 10.885,0.008c3.008,3.011 3.003,7.882 -0.008,10.889Zm-5.23,-48.781c-16.373,0 -29.701,-13.324 -29.701,-29.698c0,-16.381 13.328,-29.714 29.701,-29.714c16.378,0 29.706,13.333 29.706,29.714c0,16.374 -13.328,29.698 -29.706,29.698Zm-160.386,-29.702c0,-16.381 13.328,-29.71 29.714,-29.71c16.369,0 29.689,13.329 29.689,29.71c0,16.373 -13.32,29.693 -29.689,29.693c-16.386,0 -29.714,-13.32 -29.714,-29.693Z" />
+        </svg>
+    </a>
+    <a class="share-button-single" target="_blank" rel="noopener noreferrer"
+        aria-label="share Kubernetes Controller：从 ReplicaSet 开始 on facebook"
+        href="https://facebook.com/sharer/sharer.php?u=https%3a%2f%2fMilesChing.github.io%2fposts%2fkubernetes%2freplicaset-src%2f">
+        <svg height="100%" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;"
+            version="1.1" viewBox="0 0 512 512" width="100%" xml:space="preserve">
+            <path
+                d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-106.468,0l0,-192.915l66.6,0l12.672,-82.621l-79.272,0l0,-53.617c0,-22.603 11.073,-44.636 46.58,-44.636l36.042,0l0,-70.34c0,0 -32.71,-5.582 -63.982,-5.582c-65.288,0 -107.96,39.569 -107.96,111.204l0,62.971l-72.573,0l0,82.621l72.573,0l0,192.915l-191.104,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Z" />
+        </svg>
+    </a>
+    <a class="share-button-single" target="_blank" rel="noopener noreferrer"
+        aria-label="share Kubernetes Controller：从 ReplicaSet 开始 on whatsapp"
+        href="whatsapp://send?text=Kubernetes%20Controller%ef%bc%9a%e4%bb%8e%20ReplicaSet%20%e5%bc%80%e5%a7%8b%20-%20https%3a%2f%2fMilesChing.github.io%2fposts%2fkubernetes%2freplicaset-src%2f">
+        <svg height="100%" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;"
+            version="1.1" viewBox="0 0 512 512" width="100%" xml:space="preserve">
+            <path
+                d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-58.673,127.703c-33.842,-33.881 -78.847,-52.548 -126.798,-52.568c-98.799,0 -179.21,80.405 -179.249,179.234c-0.013,31.593 8.241,62.428 23.927,89.612l-25.429,92.884l95.021,-24.925c26.181,14.28 55.659,21.807 85.658,21.816l0.074,0c98.789,0 179.206,-80.413 179.247,-179.243c0.018,-47.895 -18.61,-92.93 -52.451,-126.81Zm-126.797,275.782l-0.06,0c-26.734,-0.01 -52.954,-7.193 -75.828,-20.767l-5.441,-3.229l-56.386,14.792l15.05,-54.977l-3.542,-5.637c-14.913,-23.72 -22.791,-51.136 -22.779,-79.287c0.033,-82.142 66.867,-148.971 149.046,-148.971c39.793,0.014 77.199,15.531 105.329,43.692c28.128,28.16 43.609,65.592 43.594,105.4c-0.034,82.149 -66.866,148.983 -148.983,148.984Zm81.721,-111.581c-4.479,-2.242 -26.499,-13.075 -30.604,-14.571c-4.105,-1.495 -7.091,-2.241 -10.077,2.241c-2.986,4.483 -11.569,14.572 -14.182,17.562c-2.612,2.988 -5.225,3.364 -9.703,1.12c-4.479,-2.241 -18.91,-6.97 -36.017,-22.23c-13.314,-11.876 -22.304,-26.542 -24.916,-31.026c-2.612,-4.484 -0.279,-6.908 1.963,-9.14c2.016,-2.007 4.48,-5.232 6.719,-7.847c2.24,-2.615 2.986,-4.484 4.479,-7.472c1.493,-2.99 0.747,-5.604 -0.374,-7.846c-1.119,-2.241 -10.077,-24.288 -13.809,-33.256c-3.635,-8.733 -7.327,-7.55 -10.077,-7.688c-2.609,-0.13 -5.598,-0.158 -8.583,-0.158c-2.986,0 -7.839,1.121 -11.944,5.604c-4.105,4.484 -15.675,15.32 -15.675,37.364c0,22.046 16.048,43.342 18.287,46.332c2.24,2.99 31.582,48.227 76.511,67.627c10.685,4.615 19.028,7.371 25.533,9.434c10.728,3.41 20.492,2.929 28.209,1.775c8.605,-1.285 26.499,-10.833 30.231,-21.295c3.732,-10.464 3.732,-19.431 2.612,-21.298c-1.119,-1.869 -4.105,-2.99 -8.583,-5.232Z" />
+        </svg>
+    </a>
+    <a class="share-button-single" target="_blank" rel="noopener noreferrer"
+        aria-label="share Kubernetes Controller：从 ReplicaSet 开始 on telegram"
+        href="https://telegram.me/share/url?text=Kubernetes%20Controller%ef%bc%9a%e4%bb%8e%20ReplicaSet%20%e5%bc%80%e5%a7%8b&amp;url=https%3a%2f%2fMilesChing.github.io%2fposts%2fkubernetes%2freplicaset-src%2f">
+        <svg height="100%" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;"
+            version="1.1" width="100%" xml:space="preserve" viewBox="2 2 28 28">
+            <path
+                d="M26.49,29.86H5.5a3.37,3.37,0,0,1-2.47-1,3.35,3.35,0,0,1-1-2.47V5.48A3.36,3.36,0,0,1,3,3,3.37,3.37,0,0,1,5.5,2h21A3.38,3.38,0,0,1,29,3a3.36,3.36,0,0,1,1,2.46V26.37a3.35,3.35,0,0,1-1,2.47A3.38,3.38,0,0,1,26.49,29.86Zm-5.38-6.71a.79.79,0,0,0,.85-.66L24.73,9.24a.55.55,0,0,0-.18-.46.62.62,0,0,0-.41-.17q-.08,0-16.53,6.11a.59.59,0,0,0-.41.59.57.57,0,0,0,.43.52l4,1.24,1.61,4.83a.62.62,0,0,0,.63.43.56.56,0,0,0,.4-.17L16.54,20l4.09,3A.9.9,0,0,0,21.11,23.15ZM13.8,20.71l-1.21-4q8.72-5.55,8.78-5.55c.15,0,.23,0,.23.16a.18.18,0,0,1,0,.06s-2.51,2.3-7.52,6.8Z" />
+        </svg>
+    </a>
+</div>
+  </footer>
+</article>
+    </main><footer class="footer">
+    <span>&copy; 2020 <a href="https://MilesChing.github.io/">MilesChing</a></span>
+    <span>&middot;</span>
+    <span>Powered by <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo️️</a>️</span>
+    <span>&middot;</span>
+    <span>Theme️ <a href="https://git.io/hugopapermod" rel="noopener" target="_blank">PaperMod</a></span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top">
+    <button class="top-link" id="top-link" type="button">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6">
+            <path d="M12 6H0l6-6z" /></svg>
+    </button>
+</a>
+<script src="https://MilesChing.github.io/js/highlight.min.min.e7afc2928c0925d65c4732dfebe147014d91299a98e819e4b42f25c4fa68e91c.js" integrity="sha256-56/CkowJJdZcRzLf6&#43;FHAU2RKZqY6BnktC8lxPpo6Rw="></script>
+<script>hljs.initHighlightingOnLoad();</script>
+<script>
+    window.onload = function () {
+        if (localStorage.getItem("menu-scroll-position")) {
+            document.getElementById('menu').scrollLeft = localStorage.getItem("menu-scroll-position");
+        }
+    }
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+
+            document.querySelector(this.getAttribute("href")).scrollIntoView({
+                behavior: "smooth"
+            });
+        });
+    });
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+    function menu_on_scroll() {
+        localStorage.setItem("menu-scroll-position", document.getElementById('menu').scrollLeft);
+    }
+</script>
+</body>
+
+</html>

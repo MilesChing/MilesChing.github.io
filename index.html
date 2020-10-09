@@ -64,6 +64,26 @@
     </footer>
 </article>
 <article class="post-entry">
+  <figure class="entry-cover">
+    <img src="https://cdn.lynda.com/static/landing/images/hero/MasterCloudNativeInfrastructurewithKubernetes_LP_1200x630-1548277017303.jpg" alt="cover image for Kubernetes Controller：从 ReplicaSet 开始">
+  </figure>
+  <header class="entry-header">
+    <h2>
+      Kubernetes Controller：从 ReplicaSet 开始
+    </h2>
+  </header>
+  <section class="entry-content">
+    <p>在 Kubernetes Control Plane 提供的多个原生工作负载（Workload）中，ReplicaSet 是最简单和基础的一个。本文对 Kubernetes Controller 的普适性结构设计和其中一部分细节作了介绍，并借此对 ReplicaSet Controller 的源代码进行了分析。
+Kubernetes 控制平台 Kubernetes 的声明式（Declarative）接口不仅是与命令式接口并列的某种交互方法，而是深深根植于它控制平台的全部设计。在这个声明式交互的系统中，系统管理员通过声明对象（Object）将自己期望的行为或运行方式告知系统，系统通过对现有对象的观察和解析不断改变自己的行为。这里的对象即 Storage 中的一个 Structure，其各字段和语义都已事先被系统和使用者约定，管理员与系统的交互方式并非通过命令语句而仅仅通过对这些 Structure 的创建、删除和修改。对于每种不同的 Structure 类型，Kubernetes 通过一个对应的 Controller 来处理上述观察、解析和系统行为的调整。
+ 在机器人技术和自动化技术中，控制循环是调节系统状态的无终止循环。
+ Kubernetes Controller 是监视集群状态的控制循环，在每个循环中根据需要做出或请求更改。每个 Controller 监控至少一个 Kubernetes 资源类型，负责其全部对象实例的正常功能，试图做出行为将当前的集群状态移动到更接近期望的状态。这些对象一般具有表示所需状态的 Spec 字段和表示当前状态的 Status 字段。Spec 是让用户写入期望的状态，系统可以通过 Spec 读出用户的期望。Status 是系统写入观察到的状态，用户可以从中读出系统当前是什么状态。Controller 用以维护集群的这些 “行为” 绝大多数通过调用 API Server 得以完成，且大多数同样是基于声明式系统的。举例来说，ReplicaSet 是一个负责调整 Container 数量的 Controller ，但它在需要创建和删除 Container 时仅仅需要在数据库中创建或删除 Pod 对象即可，Pod Controller 会立即关注到这些改动并实际创建出所需的 Container 以完成它的工作。在这个过程中 API Server 提供了在数据库中创建、删除和修改对象的统一接口，但实际工作是由 Controller 完成的。实际上这种通过 Object 的交互是 Controller 之间协作的普遍方式（如 Deployment 与 ReplicaSet 的协作）。...</p>
+  </section>
+  <footer class="entry-footer">
+    <time>October 3, 2020</time>&nbsp;·&nbsp;18 min&nbsp;·&nbsp;Zhengrui Qin
+  </footer>
+  <a class="entry-link" aria-label="post link to Kubernetes Controller：从 ReplicaSet 开始" href="https://MilesChing.github.io/posts/kubernetes/replicaset-src/"></a>
+</article>
+<article class="post-entry">
   <header class="entry-header">
     <h2>
       UWP开发：文件和文件夹权限管理
@@ -125,21 +145,6 @@
     <time>June 18, 2019</time>&nbsp;·&nbsp;2 min&nbsp;·&nbsp;Zhengrui Qin
   </footer>
   <a class="entry-link" aria-label="post link to 图像处理学习笔记：图像滤波处理" href="https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B003/"></a>
-</article>
-<article class="post-entry">
-  <header class="entry-header">
-    <h2>
-      图像处理学习笔记：数字图像处理基础
-    </h2>
-  </header>
-  <section class="entry-content">
-    <p>图像处理的方法有模拟式和数字式两种。我们日常生活中见到的图像一般是连续形式的模拟图像，所以数字图像处理的一个先决条件就是将连续图像离散化，转换为数字图像。
-...</p>
-  </section>
-  <footer class="entry-footer">
-    <time>June 18, 2019</time>&nbsp;·&nbsp;1 min&nbsp;·&nbsp;Zhengrui Qin
-  </footer>
-  <a class="entry-link" aria-label="post link to 图像处理学习笔记：数字图像处理基础" href="https://MilesChing.github.io/posts/image_processing/%E5%9B%BE%E5%83%8F%E5%A4%84%E7%90%86%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B001/"></a>
 </article>
 <footer class="page-footer">
   <nav class="pagination">
