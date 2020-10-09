@@ -61,7 +61,7 @@ Event Handler 是捕获 Edge 并触发 Level Driven 处理过程的关键。它�
 
 #### Work Queue 和 Worker
 
-为了处理不同实例，Queue & Worker 结构被采用。Work Queue 中的 Item 是由 Event Handler 放入的 Object Key ，而每个 Worker 取出 Item 后，对该 Item 指向的 Object 执行一个 Control Loop（在某些 Controller 中将这些 Worker 称为 Reconciler）。Control Loop 是一个完全 Level Driven 的过程，在一次循环中它首先获取待处理对象的当前状态，将它与对象中指定的期望状态相比较，做出决策并采取行动使其收敛到期望状态。
+为了处理不同实例，Queue & Worker 结构被采用。Work Queue 中的 Item 是由 Event Handler 放入的 Object Key ，而每个 Worker 取出 Item 后，对该 Item 指向的 Object 执行一个 Control Loop（在某些 Controller 中将这些 Worker 称为 Reconciler，将 Control Loop 称为 Reconcile ，无论如何我们在下文中使用 Control Loop 这个名词，因为这十分直观地表示了它是对于某个 ReplicaSet 实例的周期性处理过程中的一个周期）。Control Loop 是一个完全 Level Driven 的过程，在一次循环中它首先获取待处理对象的当前状态，将它与对象中指定的期望状态相比较，做出决策并采取行动使其收敛到期望状态。
 
 ```go
 for {
@@ -107,10 +107,10 @@ RepicaSet 是通过一组字段来定义的，包括一个用来识别其所管�
 - `fullyLabeledReplicas`：当前被 ReplicaSet 管理的 Pod 中，具有与 Pod Template 完全相同的 Label 的 Pod 的数量。实际上被管理的 Pod 并不需要有与 Template 完全相同的 Label 也可能满足 Label Selector 的约束，这就是为什么这个字段的值可能与 replicas 不同。
 - `readyReplicas`：当前被 ReplicaSet 管理的 Pod 中处于 Ready 状态的 Pod 的数量。
 - `availableReplicas`：当前被 ReplicaSet 管理的 Pod 中被认为 Available 的 Pod 的数量。
-- `observedGeneration`：
-- `conditions`：
+- `observedGeneration`：留给 Deployment Controller 使用，本文不涉及此字段。
+- `conditions`：ReplicaSet 在控制流程（Control Loop）中的状态。
 
-这里需要注意 “被管理” 、“处于 Ready 状态” 以及 “被认为 Available” 这几种表达方式之间的关系和细微不同，下面这张图片是一个很好的例子：
+这里需要注意 “被管理” 、“处于 Ready 状态” 以及 “被认为 Available” 这几种表达方式之间的关系和细微不同：
 
 - **Owned Pod** ：被管理的 Pod（或 ReplicaSet 拥有的 Pod）即 ReplicaSet 中的 “Set” 中的 Pod 。当某个 Pod 与 Label Selector 相匹配它将立即被 ReplicaSet 接收，即被添加到集合中，当集合中的某个 Pod（通过修改 Label 等方式）不再匹配 Label Selector 它将立即被释放，即从集合中移出。某个 Pod 是否被另一个 ReplicaSet 的判断标准是它的 `ownerReference` 字段是否指向该 ReplicaSet。
 
@@ -130,7 +130,7 @@ ReplicaSet Controller 的总体结构和各模块的职责与上面我们介绍�
 
 ### 初始化和启动
 
-构造函数 [NewReplicaSetController](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L112) 只是传递参数和初始化日志，其内部调用了 [NewBaseController](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L129) 是 ReplicaSet Controller 真正的构造函数。初始化分为三部分：
+构造函数 [NewReplicaSetController](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L112) 只是传递参数和初始化日志，其内部调用了 [NewBaseController](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L129) 是 ReplicaSet Controller 真正的构造函数。初始化分为三部分：
 
 首先，初始化 `ReplicaSetController` 实例，包括将输入的 Client（`podControl` 、`kubeClient` 都是 Client-go 中 Interface 提供的调用 API Server 的接口，即对 REST API 的封装）传递给 Controller 、设置 `burstReplicas` 参数（该参数是控制平台启动时设置给 Controller Manager 的，Controller Manager 在初始化 Controller 时将启动参数传入）、初始两个内部模块 `expectations` 及 `queue` 。
 
@@ -211,7 +211,7 @@ Event Handler 是将 Edge Driven 转化为 Level Driven 的关键，也是触发
 
 #### Add ReplicaSet
 
-[`addRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L284) 在有 ReplicaSet 被创建（Informer 发现从前未出现过的 ReplicaSet）时被调用。它仅仅输出了日志并将被创建的 ReplicaSet 的 Key 直接加入队列，因为新出现的 ReplicaSet 显然有可能处于非期望状态。
+[`addRS`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L284) 在有 ReplicaSet 被创建（Informer 发现从前未出现过的 ReplicaSet）时被调用。它仅仅输出了日志并将被创建的 ReplicaSet 的 Key 直接加入队列，因为新出现的 ReplicaSet 显然有可能处于非期望状态。
 
 ```go
 func (rsc *ReplicaSetController) addRS(obj interface{}) {
@@ -223,7 +223,7 @@ func (rsc *ReplicaSetController) addRS(obj interface{}) {
 
 #### Update ReplicaSet
 
-修改 ReplicaSet 的许多字段都会导致这个对象变得需要被处理，如改变 Label Selector 使其管理不同的 Pod 集合、改变 Replicas 使其现有的 Pod 数量不再满足期望等。 [`updateRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L291) 可能在几种情况下被调用：
+修改 ReplicaSet 的许多字段都会导致这个对象变得需要被处理，如改变 Label Selector 使其管理不同的 Pod 集合、改变 Replicas 使其现有的 Pod 数量不再满足期望等。 [`updateRS`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L291) 可能在几种情况下被调用：
 
 1. 某 ReplicaSet 被使用 Update 或 Patch 方法更改，触发 Update 事件；
 1. 在 Periodic Resync 的过程中，所有 ReplicaSet 都会被触发 Update 事件；
@@ -278,7 +278,7 @@ func (rsc *ReplicaSetController) updateRS(old, cur interface{}) {
 
 #### Delete ReplicaSet
 
-[`deleteRS`](https://github.com/kubernetes/kubernetes/blob/bbbab14216ee2256079da2ced5f52f91d08f5d6d/pkg/controller/replicaset/replica_set.go#L326) 的触发有两种情况，即 API Server 告知 Informer 有 Object 被删除或 Informer 自行产生的 `DeletedFinalStateUnknown` 。这里只是简单的对参数的类型进行了判断，如果传入的 `obj` 是一个 `DeletedFinalStateUnknown` 那么从中取出真正的 ReplicaSet 进行后面的处理。实际上处理也仅仅是将对应的 ReplicaSet 唤醒。
+[`deleteRS`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L326) 的触发有两种情况，即 API Server 告知 Informer 有 Object 被删除或 Informer 自行产生的 `DeletedFinalStateUnknown` 。这里只是简单的对参数的类型进行了判断，如果传入的 `obj` 是一个 `DeletedFinalStateUnknown` 那么从中取出真正的 ReplicaSet 进行后面的处理。实际上处理也仅仅是将对应的 ReplicaSet 唤醒。
 
 ```go
 func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
@@ -317,7 +317,7 @@ func (rsc *ReplicaSetController) deleteRS(obj interface{}) {
 
 对于 Pod 的创建、删除和修改可能带来什么？当一个 Pod 被创建或删除，如果它属于某一个 ReplicaSet 的管辖，那么该 ReplicaSet 就会因为 Pod 数量发生改变而偏离期望状态。当某个 Pod 自身被修改，它可能会由于 Label 的改变而离开原本的 ReplicaSet 而被新的 ReplicaSet 管理，也可能会因为状态的变更（原本 Active 的 Pod 不再 Active 等）而导致它所在的 ReplicaSet 偏离期望状态。
 
-[`addPod`](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/replicaset/replica_set.go#L356) 会在某个新 Pod 出现在 ETCD 中时被调用，此时
+[`addPod`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/replicaset/replica_set.go#L356) 会在某个新 Pod 出现在 ETCD 中时被调用，此时
 
 1. 要么 Pod 被 Controller 中的某个 Worker 创建成功，那么该 Pod 应该原本具有一个指向某 ReplicaSet 的 Owner Reference 。（在 Kubernetes 源码中许多表示 Owner Reference 的函数和变量被命名为 Controller Reference ，但这种名称容易与 Controller 混淆而造成迷惑，所以统一称为 Owner Reference）
 1. 要么 Pod 被第三方（用户或其他 Controller）创建，那么该 Pod 可能没有 Owner ，也可能属于某个 ReplicaSet 或属于某个其他类型的 Object 。
@@ -622,7 +622,7 @@ utilruntime.HandleError(err)
 podsToDelete := getPodsToDelete(filteredPods, relatedPods, diff)
 ```
 
-通过阅读其中更深的代码，可以发现 `getPodsToDelete` 是通过对 [`ActivePodsWithRanks`](https://github.com/kubernetes/kubernetes/blob/94833ccdf29146c4908ed1b891a87f2510684ed1/pkg/controller/controller_utils.go#L815) 进行排序，并取排序靠前的 Pod 。排序的比较关系为此处的 [`Less`](https://github.com/kubernetes/kubernetes/blob/94833ccdf29146c4908ed1b891a87f2510684ed1/pkg/controller/controller_utils.go#L836) 方法。
+通过阅读其中更深的代码，可以发现 `getPodsToDelete` 是通过对 [`ActivePodsWithRanks`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L815) 进行排序，并取排序靠前的 Pod 。排序的比较关系为此处的 [`Less`](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L836) 方法。
 
 而后，通过开启多个 Go Routine 并行删除选定的 Pod 。
 
@@ -645,3 +645,64 @@ for _, pod := range podsToDelete {
 }
 wg.Wait()
 ```
+
+### Expectations
+
+Expectations 模块被用于几乎所有需要删除或创建 Pod 的 Controller（ReplicaSet 、Jobs 、DeamonSet）中，来避免非阻塞式创建和删除 Pod 可能导致的重复操作问题。以创建 Pod 为例，典型的创建 Pod 过程：
+
+1. Controller 通过 Client-go 封装的 Client 向 API Server 发送请求创建 Pod ，然后并不等待其结果，继续进行其他工作（非阻塞的）；
+1. API Server 执行创建 Pod 流程并在 ETCD 中产生一个 Pod 对象；
+1. ETCD 中的创建事件会通过 Controller 中的 Pod Informer 与 API Server 之间的 Watch 连接被通知到 Pod Informer；
+1. Pod Informer 首先将这个新创建的 Pod 同步到自己的 Local Cache 中（在 Local Cache 中也创建一个相同的对象），然后调用 Event Handler 中的 `addPod` ；
+
+由于创建 Pod 的流程是非阻塞的，对于 Controller 来说，这一过程被成功执行的标志是一个对应的创建 Pod 事件最终唤醒 Event Handler 。当这一过程中出现错误，Controller 将无法得知，因此 Controller 通过设置超时来判断这些错误：当某些操作没有在一定时间内响应到 Event Handler ，则认为那些操作失败了。这里存在一个同步问题，即 Controller 必须保证每个 Control Loop 是同步的或串行的，在前一 Control Loop 的更改完成或失败以前，下一 Control Loop 不能采取任何行动，因为此时对象的状态并非它的最终状态，如果继续按照此状态进行决策则会产生重复的操作。
+
+> 假设对于一个期望为 5 个 Pod ，实际拥有 3 个 Pod 的 ReplicaSet ，Control Loop A 创建了 2 个 Pod 。但根据上面的描述，这两个 Pod 不可能立即被同步到 Local Cache 。在其最终因创建成功而被同步到 Local Cache 之前，Local Cache 中的 ReplicaSet 状态都将为 3 个 Pod 。此时若另一 Control Loop 被此 ReplicaSet 唤醒，它将再次发出请求创建 2 个 Pod ，这产生了错误的重复操作。因此，我们必须在这些创建和删除在执行时（被最终确认成功或失败之前）阻止其他 Control Loop 进行操作（实际上由于创建和删除 Pod 的非阻塞性，这种重复操作是完全有可能发生的，即便 Work Queue 可以保证不会有两个 Worker 同时处理同一 Object）。
+
+Expectations 是 Controller 维护的一个记录，它记录了对每个 ReplicaSet 的操作所处的状态。这样 Control Loop 在准备创建 Pod 后，它会找到对应的 ReplicaSet 在 Expectations 中的那条记录，然后在其中写道，“13:30 ，创建了 2 个 Pod” 。幸运的话这两个 Pod 会被成功创建，并且 Event Handler 中的 `addPod` 会被调用两次，那么只要在 `addPod` 中加入逻辑修改 Expectations 即可：比如当第一次调用时，Expectations 会被改成 “13:30 ，创建了 1 个 Pod”，而第二次调用时，这条记录将被清空。在此期间，如果 Control Loop 再次处理相同的 ReplicaSet 对象，那么它看到几秒钟前创建的 Pod 记录还留在 Expectations 中没有清除，便不会对这个对象做任何处理，因为这样是不明智的。但如果它看到 Expectations 中的记录已有十分钟之久，那么这次操作八成是失败了，它便会重新查看该对象的当前状态，并再次发出创建 Pod 请求。
+
+总结一下就是涉及 Expectations 的全部场景，以及其[每个方法](https://github.com/kubernetes/kubernetes/blob/release-1.18/pkg/controller/controller_utils.go#L144)的作用了。Expectations 与 Local Cache 类似使用 Key（Namespaced Name）索引对象。在 Control Loop 要决定是否对某对象创建和删除 Pod 之前，首先要检查 Expectations 中是否有未遭到响应也未超时的记录，实际上 “记录” 本质上是时间戳和创建、删除 Pod 的数量：
+
+```go
+rsNeedsSync := rsc.expectations.SatisfiedExpectations(key)
+// ...
+if rsNeedsSync && rs.DeletionTimestamp == nil {
+	manageReplicasErr = rsc.manageReplicas(filteredPods, rs)
+}
+```
+
+在创建、删除后，应将这些操作更新到 Expectations 中：
+
+```go
+rsc.expectations.ExpectCreations(rsKey, diff)
+// ...
+rsc.expectations.ExpectDeletions(rsKey, getPodKeys(podsToDelete))
+```
+
+最后，在创建和删除操作最终被 `addPod` 、`deletePod` 捕获后，应减少 Expectations 中的值：
+
+```go
+// addPod
+// If it has a ControllerRef, that's all that matters.
+if controllerRef := metav1.GetControllerOf(pod); controllerRef != nil {
+	rs := rsc.resolveControllerRef(pod.Namespace, controllerRef)
+	if rs == nil {
+		return
+	}
+	rsKey, err := controller.KeyFunc(rs)
+	if err != nil {
+		return
+	}
+	klog.V(4).Infof("Pod %s created: %#v.", pod.Name, pod)
+	rsc.expectations.CreationObserved(rsKey)
+	rsc.queue.Add(rsKey)
+	return
+}
+// ...
+// deletePod
+rsc.expectations.DeletionObserved(rsKey, controller.PodKey(pod))
+```
+
+## 尾声
+
+由于不可避免的惰性，并不是在学习过代码而是在其后很久才想到对自己的所学做一总结。其中涉及到源码我都尽量提供了在 [release-1.18](https://github.com/kubernetes/kubernetes/tree/release-1.18) 分支上的引用以方便从宏观的角度、结合代码的上下文来阅读。ReplicaSet 的整体逻辑（当理解了 Controller 的一般结构后）实际上是比较简单的，尽管其中仍然有许多细节耐人寻味，发现这些细节背后的原因大概也是经过一段时间的沉淀后再作总结的一大好处吧。又是由于懒惰和时间安排的原因，本文只其中对其浅层的代码进行了罗列和举例，深入阅读其某些模块和方法的实现会有所帮助，但私以为本文以不小的篇幅已对其中思想的部分做了大量陈述，阅读上述其余部分的代码应当很快。希望本文繁杂的语句果真足以表达 Kubernetes 设计思想的优雅。
