@@ -1,7 +1,7 @@
 ---
 title: Kubernetes Controller：从 ReplicaSet 开始
 date: 2020-10-03T08:33:10+08:00
-cover: https://www.instana.com/media/Kubernetes-Vs-Docker-01-01.png
+cover: https://cdn.lynda.com/static/landing/images/hero/MasterCloudNativeInfrastructurewithKubernetes_LP_1200x630-1548277017303.jpg
 tags: [Kubernetes]
 draft: true
 ---
