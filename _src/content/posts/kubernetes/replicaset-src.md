@@ -3,7 +3,6 @@ title: Kubernetes Controller：从 ReplicaSet 开始
 date: 2020-10-03T08:33:10+08:00
 cover: https://cdn.lynda.com/static/landing/images/hero/MasterCloudNativeInfrastructurewithKubernetes_LP_1200x630-1548277017303.jpg
 tags: [Kubernetes]
-draft: true
 ---
 
 在 Kubernetes Control Plane 提供的多个原生工作负载（Workload）中，ReplicaSet 是最简单和基础的一个。本文对 Kubernetes Controller 的普适性结构设计和其中一部分细节作了介绍，并借此对 ReplicaSet Controller 的源代码进行了分析。
