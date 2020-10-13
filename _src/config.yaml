@@ -19,6 +19,9 @@ params:
   ShowShareButtons: true
   showToc: true
   tocOpen: true
+  analytics:
+    google:
+      SiteVerificationTag: "5WI2kiS2ZrNND51atl7aEqI5rG8HRHuitgApDl0Qf2o"
   # profileMode:
   #   enabled: false
   #   title: PaperMod
